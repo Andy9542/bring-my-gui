@@ -49,27 +49,67 @@ command -v <app> || ls /opt /usr/local 2>/dev/null | grep -i <app>
 - **Found** → note the binary path, detect the toolkit (table below).
 - **Not found** → ask the user ONCE: "install from distro repos, or do you
   have a link?" Then:
-  - distro: `apt search <app>` / `dnf search` / `apk search` → install.
+  - distro: search the repo for the **binary or app name**, not a package
+    name remembered from another distro (`apt-cache search` / `dnf search` /
+    `apk search`) → install the hit → confirm with `command -v`.
   - `.deb` link: `curl -fL -o /tmp/app.deb <url> && sudo apt install -y /tmp/app.deb`
-    (resolves deps; if it then fails on a missing `.so` — commonly
-    `libasound2` for Electron — install that lib, see gotchas § App deps).
+    (resolves deps). If it then fails on a missing `.so`, that is a library
+    gap — same rule as after any install, below.
   - AppImage link: `curl -fL -o ~/app.AppImage <url> && chmod +x ~/app.AppImage`
-    — if it complains about FUSE: install `libfuse2`, or run with
-    `--appimage-extract-and-run`.
+    — if it complains about FUSE: install whatever package provides the FUSE
+    library, or run with `--appimage-extract-and-run`.
   - tarball: unpack to `~/apps/`, find the launcher binary, `ldd` it for
     missing libs before launching.
 - After any install, sanity-check with `ldd` on the ACTUAL binary path
   (`command -v <app>` for packaged apps; the AppImage/tarball launcher you
   just downloaded — it won't be on PATH): `ldd <binary> | grep "not found"`
-  → install the missing libs before going further.
+  → search the distro for each missing `.so` and install; don't copy a
+  Debian package name onto Fedora/Alpine.
+
+## Install by binary, not by package name
+
+The stack is a set of **programs**, not a set of distro package names.
+Those names split and rename across families and even across releases of
+the same family — copying last sandbox's `apt install` line into this one
+is how installs fail. `scripts/setup.sh` implements the recipe below; if
+it cannot run (no bash, no package manager you recognize), do it by hand.
+
+Required on PATH before `gui-stack.sh start`:
+
+| Binary | Role |
+|---|---|
+| `Xvfb` | virtual display |
+| `x11vnc` | VNC server |
+| `openbox` | window manager (Java/GTK dialogs won't map without one) |
+| `setxkbmap` | US layout; see gotchas § Non-Latin keys |
+| `xwininfo` | verify the app window actually mapped |
+
+Worth having; warn and continue if the repo has no provider:
+
+| Binary | Role |
+|---|---|
+| `autocutsel` | CLIPBOARD↔PRIMARY bridge |
+| `xmodmap` + `python3` | deterministic Cyrillic keysyms (gotchas § Non-Latin keys) |
+| `xclip` / `xdotool` | extras the agent may use while debugging |
+| `pgrep` | `gui-stack.sh` health fallback when the pidfile is stale |
+
+Recipe for each missing binary — stop when `command -v` succeeds:
+
+1. Skip if it's already on PATH.
+2. If the manager can install **by file path**, do that: `dnf install /usr/bin/<Binary>` (yum too). On apt, the equivalent is "which package owns this file" (`apt-file search /usr/bin/<Binary>` — get `apt-file` with the same recipe if it's missing). This is the whole point — you never need the package's current name.
+3. Try a package named like the binary, lowercased (`Xvfb` → `xvfb`). Often enough on apt and apk.
+4. Otherwise **search the file**, not the description: description search ranks a GUI that *mentions* `xmodmap` above the package that ships `/usr/bin/xmodmap`. `apk search <Binary>`, `dnf provides /usr/bin/<Binary>`. Treat the name in the output as disposable — don't paste it into the next sandbox.
+5. Re-check `command -v`. Still missing → FATAL for the required table, WARN for the optional table.
+
+The scripts are bash. Minimal images (Alpine, distroless-ish) often have only `sh`: install whatever provides `bash` with the same recipe, then re-run `setup.sh`. Don't rewrite the stack in POSIX sh to dodge that.
 
 ## Quick start
 
-All paths below are relative to this skill's directory. 
+All paths below are relative to this skill's directory.
 
 ```bash
-# 1. Install stack (idempotent; apt tested live, dnf/apk best-effort — verify
-#    package names on non-apt distros if install fails)
+# 1. Install stack (idempotent; resolves packages from binaries, any
+#    apt/dnf/yum/apk distro). Needs bash — see § Install by binary.
 bash scripts/setup.sh
 
 # 2. Start display+VNC. Script defaults: RES=1920x1080, VNC_PORT=5900+DISPLAY_NUM,
@@ -104,13 +144,13 @@ users: Cmd-V does not reach the sandbox — the session is Linux X11).
 
 Containers vary wildly: no bash (busybox/POSIX sh only), read-only skill dir,
 no sudo wrapper, stripped coreutils. If either script errors out or its
-binaries are missing, don't debug the script — run the same sequence by hand:
+binaries are missing, don't debug the script — get the binaries onto PATH
+(§ Install by binary), then run the same sequence by hand:
 
 ```bash
-# deps (adapt to your package manager; names in scripts/setup.sh)
-sudo apt-get install -y xvfb x11vnc openbox autocutsel x11-xkb-utils x11-utils xclip
-
-# display + WM + keyboard + clipboard + VNC (each line standalone)
+# deps: packages that provide Xvfb x11vnc openbox setxkbmap xwininfo
+# (optional: autocutsel xmodmap xclip python3). Search, don't copy names
+# from another distro. Then:
 unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
 [ -d /tmp/.X11-unix ] || { mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix; }
 Xvfb :0 -screen 0 "${RES:-1920x1080}x24" -ac +extension RANDR -noreset & sleep 2
@@ -245,7 +285,8 @@ Symptoms → fixes in references/gotchas.md. The hits that cover ~90%:
 - Works, then input desyncs after host idle/sleep → host-client quirk,
   reconnect the session (§ per-OS)
 - Laggy scroll on HiDPI → resolution/scale compromise (§ Latency)
-- Electron `.deb` installs but won't start → missing `libasound2` (§ App deps)
+- Electron `.deb` installs but won't start → `ldd` the binary, missing `.so`
+  is a repo search (gotchas § App deps), not a Debian package name to copy
 - User on Windows/Linux can't connect → client table above, firewall on host
   (§ Connectivity)
 

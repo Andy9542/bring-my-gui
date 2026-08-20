@@ -124,9 +124,13 @@ compression). If still laggy when scrolling at 2× resolution:
 
 ## Application
 
-**Electron `.deb` installed, won't start: `libasound.so.2: not found`**
-Common Electron packaging gap (seen with ZCode 3.8.1). Fix: install
-`libasound2` / `libasound2t64`.
+**Installed app won't start: `ldd` shows `not found`**
+Packaged Electron/Qt builds often assume desktop libraries the sandbox
+never had. Don't reach for a Debian package name from memory. Take the
+missing `.so` from `ldd <binary>`, search the distro for that soname
+(`apt-cache search`, `dnf provides '*/libfoo.so.2'`, `apk search`),
+install the hit, re-run `ldd`. Electron-on-Linux commonly misses the
+ALSA client library — same recipe, not a special case.
 
 **Chromium/Electron crash in container: sandbox / SUID errors / shm**
 Launch flags: `--no-sandbox --disable-gpu --disable-dev-shm-usage`
