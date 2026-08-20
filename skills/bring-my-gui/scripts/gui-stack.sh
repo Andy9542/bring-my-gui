@@ -77,7 +77,16 @@ PYEOF
     autocutsel -fork -selection CLIPBOARD &>/dev/null & echo "CUTSEL_C $!" >>"$PIDFILE"
     autocutsel -fork -selection PRIMARY   &>/dev/null & echo "CUTSEL_P $!" >>"$PIDFILE"
   fi
-  [ -f "$VNC_PASSWD_FILE" ] || x11vnc -storepasswd "$VNC_PASS" "$VNC_PASSWD_FILE" >/dev/null
+  if [ ! -f "$VNC_PASSWD_FILE" ]; then
+    # Fresh images have no ~/.vnc; without it storepasswd fails and x11vnc would
+    # serve with an unreadable -rfbauth file (client gets an auth error).
+    mkdir -p "$(dirname "$VNC_PASSWD_FILE")"
+    x11vnc -storepasswd "$VNC_PASS" "$VNC_PASSWD_FILE" >/dev/null 2>&1
+    [ -s "$VNC_PASSWD_FILE" ] || {
+      echo "FATAL: cannot write $VNC_PASSWD_FILE (\$HOME=$HOME) — set HOME to a writable dir or VNC auth will fail" >&2
+      return 1
+    }
+  fi
   x11vnc -display "$DISPLAY" -forever -shared -rfbauth "$VNC_PASSWD_FILE" \
     -listen 0.0.0.0 -rfbport "$VNC_PORT" -threads -defer 2 -wait 5 \
     -xkb -add_keysyms -skip_keycodes 184 -nowireframe -xdamage -xdamage \

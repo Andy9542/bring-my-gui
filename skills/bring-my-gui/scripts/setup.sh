@@ -4,6 +4,10 @@
 # a family-specific X11 package list. Source of truth: binaries the stack execs.
 # If this script can't run (no bash), SKILL.md § Install by binary, then
 # § Manual stack.
+#
+# Two phases, because one package-manager transaction is minutes faster than
+# eleven: first ask for everything at once (skipping names this distro doesn't
+# have), then resolve whatever is still missing one binary at a time.
 set -u
 
 need() { command -v "$1" >/dev/null 2>&1; }
@@ -29,16 +33,51 @@ NICE="autocutsel xmodmap xclip xdotool python3 pgrep"
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# Install one manager-native package name. Failure must not kill the script:
+# Install manager-native package names. Failure must not kill the script:
 # we try several guesses per binary.
 pkg_install() {
-  local pkg="$1"
-  [ -n "$pkg" ] || return 1
+  [ "$#" -gt 0 ] || return 1
   case "$PM" in
-    apt) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "$pkg" ;;
-    dnf) $SUDO dnf install -y "$pkg" ;;
-    yum) $SUDO yum install -y "$pkg" ;;
-    apk) $SUDO apk add "$pkg" ;;
+    apt) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "$@" ;;
+    dnf) $SUDO dnf install -y "$@" ;;
+    yum) $SUDO yum install -y "$@" ;;
+    apk) $SUDO apk add "$@" ;;
+  esac
+}
+
+# Does this manager have a package by this exact name? Index lookup, no network.
+pkg_exists() {
+  case "$PM" in
+    apt) apt-cache policy "$1" 2>/dev/null | grep -q 'Candidate: [0-9]' ;;
+    apk) [ -n "$(apk search -q -e "$1" 2>/dev/null)" ] ;;
+    *)   return 1 ;;
+  esac
+}
+
+# One transaction for everything this distro can give us under a name that
+# matches the binary. Whatever it can't, the per-binary phase picks up.
+batch_phase() {
+  local b g args=""
+  case "$PM" in
+    dnf|yum)
+      # These managers install by the file they must provide — no name needed.
+      for b in $NEED $NICE; do need "$b" || args="$args /usr/bin/$b"; done
+      [ -n "$args" ] || return 0
+      # shellcheck disable=SC2086  # deliberate word splitting: list of args
+      $SUDO "$PM" install -y --skip-unavailable $args >/dev/null 2>&1 && return 0
+      # shellcheck disable=SC2086
+      $SUDO "$PM" install -y --setopt=strict=0 $args >/dev/null 2>&1 || true
+      ;;
+    apt|apk)
+      for b in $NEED $NICE; do
+        need "$b" && continue
+        g=$(lower "$b")
+        pkg_exists "$g" && args="$args $g"
+      done
+      [ -n "$args" ] || return 0
+      # shellcheck disable=SC2086
+      pkg_install $args >/dev/null 2>&1 || true
+      ;;
   esac
 }
 
@@ -53,6 +92,9 @@ ensure_apt_file_index() {
     pkg_install apt-file >/dev/null 2>&1 || return 1
   fi
   # apt-file has no -q; Contents download is required before search.
+  # Progress goes to stderr: this function runs inside $(search_pkg …), and
+  # anything on stdout would be read back as a package name.
+  echo "  downloading the file index once (apt-file update)…" >&2
   $SUDO apt-file update >/dev/null 2>&1 || return 1
   APT_FILE_READY=1
 }
@@ -86,6 +128,7 @@ provide() {
   local bin="$1" guess pkg
   need "$bin" && return 0
   guess=$(lower "$bin")
+  echo "  resolving $bin …" >&2
 
   # dnf/yum can install by the file they should provide — no name needed.
   if [ "$PM" = dnf ] || [ "$PM" = yum ]; then
@@ -93,20 +136,28 @@ provide() {
   fi
 
   # Package often equals the lowercased binary (xvfb, x11vnc, openbox, …).
-  if pkg_install "$guess" >/dev/null 2>&1 && need "$bin"; then return 0; fi
+  # Where the index can answer "no such package" for free, don't pay for a
+  # doomed install first.
+  if pkg_exists "$guess" || [ "$PM" = dnf ] || [ "$PM" = yum ]; then
+    if pkg_install "$guess" >/dev/null 2>&1 && need "$bin"; then return 0; fi
+  fi
 
   pkg=$(search_pkg "$bin" | awk 'NF{print; exit}')
   case "$pkg" in
     ''|*' '*) return 1 ;;
   esac
-  if pkg_install "$pkg" && need "$bin"; then return 0; fi
+  if pkg_install "$pkg" >/dev/null 2>&1 && need "$bin"; then return 0; fi
   return 1
 }
 
+echo "bring-my-gui: package manager $PM — refreshing the index"
 case "$PM" in
   apt) $SUDO apt-get update -qq ;;
   apk) $SUDO apk update -q ;;
 esac
+
+echo "bring-my-gui: installing the stack (one transaction, then leftovers)"
+batch_phase
 
 miss=""
 for b in $NEED; do

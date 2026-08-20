@@ -93,6 +93,11 @@ Worth having; warn and continue if the repo has no provider:
 | `xclip` / `xdotool` | extras the agent may use while debugging |
 | `pgrep` | `gui-stack.sh` health fallback when the pidfile is stale |
 
+Doing it by hand: ask for everything in ONE transaction first (dnf/yum take
+file paths: `dnf install -y --skip-unavailable /usr/bin/Xvfb /usr/bin/x11vnc …`;
+apt/apk take the lowercased names that exist), then resolve the leftovers one
+by one. Eleven separate transactions cost minutes on a cold image.
+
 Recipe for each missing binary — stop when `command -v` succeeds:
 
 1. Skip if it's already on PATH.
