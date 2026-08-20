@@ -23,16 +23,12 @@ jobs:
         include:
           - image: ubuntu:24.04
             tag: ubuntu-2404
-            app: x11-apps
           - image: debian:bookworm-slim
             tag: debian-bookworm
-            app: x11-apps
           - image: fedora:41
             tag: fedora-41
-            app: xorg-x11-apps
           - image: alpine:3.21
             tag: alpine-321
-            app: xclock
     env:
       SKILL: /repo/skills/bring-my-gui
       RES: 1280x800
@@ -88,13 +84,19 @@ jobs:
             *) echo "no RFB banner on the published port"; exit 1 ;;
           esac
 
-      - name: Map a real app window (distro-specific package, best effort)
-        continue-on-error: true
+      - name: A GUI app actually maps a window
         run: |
           docker exec bmg sh -c '
-            { command -v apt-get >/dev/null && apt-get install -y -qq ${{ matrix.app }}; } ||
-            { command -v dnf     >/dev/null && dnf install -y -q ${{ matrix.app }}; } ||
-            { command -v apk     >/dev/null && apk add --no-cache ${{ matrix.app }}; }
+            # Ask for the binary, not for a package name. Hardcoding
+            # xorg-x11-apps here is what broke this step on Fedora 41, where
+            # xclock had been split into its own package — the exact failure
+            # this skill exists to route around.
+            command -v xclock >/dev/null ||
+              { command -v dnf     >/dev/null && dnf install -y -q /usr/bin/xclock; } ||
+              { command -v yum     >/dev/null && yum install -y -q /usr/bin/xclock; } ||
+              { command -v apt-get >/dev/null && apt-get install -y -qq x11-apps; } ||
+              { command -v apk     >/dev/null && apk add --no-cache xclock; }
+            command -v xclock >/dev/null || { echo "could not install an xclock binary"; exit 1; }
             # analog face: draws with Xlib primitives, so it does not depend on
             # whichever fonts this image happens to ship
             nohup env DISPLAY=:0 xclock -update 1 -geometry 700x700+160+50 \
