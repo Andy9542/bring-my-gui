@@ -95,7 +95,9 @@ jobs:
             { command -v apt-get >/dev/null && apt-get install -y -qq ${{ matrix.app }}; } ||
             { command -v dnf     >/dev/null && dnf install -y -q ${{ matrix.app }}; } ||
             { command -v apk     >/dev/null && apk add --no-cache ${{ matrix.app }}; }
-            nohup env DISPLAY=:0 xclock -digital -update 1 -geometry 900x520+120+90 \
+            # analog face: draws with Xlib primitives, so it does not depend on
+            # whichever fonts this image happens to ship
+            nohup env DISPLAY=:0 xclock -update 1 -geometry 700x700+160+50 \
               </dev/null >/dev/null 2>&1 &
             sleep 4
             DISPLAY=:0 xwininfo -root -tree | grep -i xclock'
@@ -104,10 +106,20 @@ jobs:
         continue-on-error: true
         run: |
           pipx install vncdotool || pip install --break-system-packages --quiet vncdotool
-          # Force a full framebuffer resend and let it arrive: a fresh client
-          # otherwise captures a partial update and the artifact comes out blank.
-          docker exec bmg x11vnc -R refresh -display :0 || true
-          vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" pause 3 capture screenshot-${{ matrix.tag }}.png
+          # A fresh client gets whatever partial framebuffer update arrives
+          # first, so ask for a full resend and take the fullest of three
+          # frames — a partial one is an order of magnitude smaller.
+          for i in 1 2 3; do
+            docker exec bmg x11vnc -R refresh -display :0 || true
+            vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" pause 3 capture "frame-$i.png" || true
+          done
+          wc -c frame-*.png
+          best=""; bestsz=0
+          for f in frame-*.png; do
+            sz=$(wc -c < "$f")
+            if [ "$sz" -gt "$bestsz" ]; then bestsz=$sz; best=$f; fi
+          done
+          cp "$best" screenshot-${{ matrix.tag }}.png
           ls -l screenshot-${{ matrix.tag }}.png
 
       - uses: actions/upload-artifact@v4
