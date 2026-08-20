@@ -1,0 +1,24 @@
+{
+  "name": "bring-my-gui",
+  "displayName": "Bring My GUI",
+  "description": "Forward a GUI app from a headless Linux sandbox (Docker container, agent sbx) to your host screen over VNC. Covers the Xvfb + openbox + x11vnc stack, HiDPI scaling, clipboard, non-Latin keyboard input and the traps that eat a debugging session.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Andy95"
+  },
+  "homepage": "https://github.com/Andy9542/bring-my-gui",
+  "repository": "https://github.com/Andy9542/bring-my-gui",
+  "license": "MIT",
+  "keywords": [
+    "gui",
+    "vnc",
+    "docker",
+    "xvfb",
+    "x11vnc",
+    "headless",
+    "sandbox",
+    "x11",
+    "remote-desktop"
+  ],
+  "skills": "./skills/"
+}
