@@ -1,0 +1,130 @@
+name: stack
+
+# Proves the stack still comes up on every supported distro family, from a
+# clean image, and that a VNC client on the host can actually reach it.
+# The weekly run is the point: distro packages get renamed and split, and
+# this skill installs by binary precisely so that keeps working.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  stack:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            tag: ubuntu-2404
+            app: x11-apps
+          - image: debian:bookworm-slim
+            tag: debian-bookworm
+            app: x11-apps
+          - image: fedora:41
+            tag: fedora-41
+            app: xorg-x11-apps
+          - image: alpine:3.21
+            tag: alpine-321
+            app: xclock
+    env:
+      SKILL: /repo/skills/bring-my-gui
+      RES: 1280x800
+      VNC_PASS: ci-demo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ${{ matrix.image }} with the VNC port published
+        run: docker run -d --name bmg -p 5900:5900 -v "$PWD:/repo:ro" ${{ matrix.image }} sleep 1200
+
+      - name: Bootstrap bash (minimal images ship only sh)
+        run: |
+          docker exec bmg sh -c '
+            command -v bash >/dev/null && exit 0
+            command -v apk >/dev/null && exec apk add --no-cache bash
+            command -v apt-get >/dev/null && { apt-get update -qq && exec apt-get install -y -qq bash; }
+            exit 1'
+
+      - name: setup.sh resolves every binary from the local package index
+        run: docker exec bmg bash "$SKILL/scripts/setup.sh"
+
+      - name: Required binaries are on PATH
+        run: |
+          docker exec bmg sh -c '
+            for b in Xvfb x11vnc openbox setxkbmap xwininfo; do
+              command -v $b >/dev/null || { echo "missing: $b"; exit 1; }
+            done'
+
+      - name: gui-stack.sh start
+        run: docker exec -e RES -e VNC_PASS bmg bash "$SKILL/scripts/gui-stack.sh" start
+
+      - name: gui-stack.sh status
+        run: docker exec bmg bash "$SKILL/scripts/gui-stack.sh" status
+
+      - name: VNC auth file was written (fresh images have no ~/.vnc)
+        run: docker exec bmg sh -c 'test -s "$HOME/.vnc/passwd"'
+
+      - name: Xvfb runs at the requested geometry
+        run: docker exec -e RES bmg sh -c 'DISPLAY=:0 xwininfo -root | grep -q "geometry ${RES}+0+0"'
+
+      - name: Cyrillic keysyms are pre-loaded on reserved keycodes
+        # Unicode range matters: clients send 0x01000000|codepoint. A bare
+        # 0x0430 would be a different keysym and non-Latin input would rot.
+        run: docker exec bmg sh -c 'DISPLAY=:0 xmodmap -pk | grep -q "0x1000430 (U0430)"'
+
+      - name: A host-side client reaches it — RFB handshake on the published port
+        run: |
+          banner=$(timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5900; head -c 12 <&3')
+          echo "server greeting: $banner"
+          case "$banner" in
+            RFB*) ;;
+            *) echo "no RFB banner on the published port"; exit 1 ;;
+          esac
+
+      - name: Map a real app window (distro-specific package, best effort)
+        continue-on-error: true
+        run: |
+          docker exec bmg sh -c '
+            { command -v apt-get >/dev/null && apt-get install -y -qq ${{ matrix.app }}; } ||
+            { command -v dnf     >/dev/null && dnf install -y -q ${{ matrix.app }}; } ||
+            { command -v apk     >/dev/null && apk add --no-cache ${{ matrix.app }}; }
+            nohup env DISPLAY=:0 xclock -digital -update 1 </dev/null >/dev/null 2>&1 &
+            sleep 4
+            DISPLAY=:0 xwininfo -root -tree | grep -i xclock'
+
+      - name: Screenshot through a real VNC client
+        continue-on-error: true
+        run: |
+          pipx install vncdotool || pip install --break-system-packages --quiet vncdotool
+          vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" capture screenshot-${{ matrix.tag }}.png
+          ls -l screenshot-${{ matrix.tag }}.png
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-${{ matrix.tag }}
+          path: screenshot-${{ matrix.tag }}.png
+          if-no-files-found: ignore
+
+      - name: Stack logs (on failure)
+        if: failure()
+        run: docker exec bmg sh -c 'tail -n 40 /tmp/bring-my-gui/*.log' || true
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f bmg
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - run: shellcheck --severity=warning skills/bring-my-gui/scripts/*.sh
