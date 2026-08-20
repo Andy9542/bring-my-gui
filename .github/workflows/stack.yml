@@ -106,10 +106,18 @@ jobs:
         continue-on-error: true
         run: |
           pipx install vncdotool || pip install --break-system-packages --quiet vncdotool
-          # A fresh client gets whatever partial framebuffer update arrives
-          # first, so ask for a full resend and take the fullest of three
-          # frames — a partial one is an order of magnitude smaller.
+          # What is actually on the screen, for when a frame comes out black.
+          docker exec bmg bash -lc 'pgrep -a xclock; DISPLAY=:0 xwininfo -root -tree | grep -i xclock' || true
+          # A fresh client can be served a frame that predates the window, so
+          # remap the window to generate damage x11vnc has to ship, ask for a
+          # full resend, and keep the fullest of three frames — a frame with
+          # nothing on it is an order of magnitude smaller.
           for i in 1 2 3; do
+            docker exec bmg bash -lc '
+              export DISPLAY=:0
+              for w in $(xdotool search --class xclock); do
+                xdotool windowunmap "$w"; sleep 0.3; xdotool windowmap "$w"
+              done' || true
             docker exec bmg x11vnc -R refresh -display :0 || true
             vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" pause 3 capture "frame-$i.png" || true
           done
