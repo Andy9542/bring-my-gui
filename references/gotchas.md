@@ -51,7 +51,17 @@ keycodes via xmodmap before starting x11vnc** — deterministic mapping,
 nothing dynamic left to drift. Recipe: keep `setxkbmap -layout us`, then map
 each letter (lower+upper) to a free multimedia keycode (191–202, 212–223,
 225–227, 249–254 — XF86*/F13+ range nobody presses over VNC; verify with
-`xmodmap -pk` that a keycode is free or harmless before overwriting):
+`xmodmap -pk` that a keycode is free or harmless before overwriting).
+
+**The keysym-range trap (cost a full debugging round):** clients send
+Unicode-range keysyms — Cyrillic "е" arrives as `0x01000435` (x11vnc logs it
+as `0x1000435 "U0435"`). Writing `keycode N = 0x0435 …` in xmodmap creates a
+DIFFERENT, unmatched keysym — x11vnc won't find it, silently falls back to
+the drifting allocator (stage 2), and you'll wrongly conclude the pre-load
+"works" if you verify by grepping your own wrong pattern. Always write
+`0x01000000 | unicode`. Symptom that betrays the wrong range: entries show
+`(no name)` in `xmodmap -pk` output while x11vnc's log keeps printing
+`added missing keysym … 0x100xxxx`.
 
 ```bash
 python3 - <<'EOF'
@@ -59,7 +69,7 @@ kcs=[191,192,193,194,195,196,197,198,199,200,201,202,212,213,214,215,
      216,217,218,219,220,221,222,223,225,226,227,249,250,251,252,253,254]
 alpha="абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 open('/tmp/cyr.xmodmap','w').write("\n".join(
-    f"keycode {kc} = 0x{ord(c):04x} 0x{ord(c.upper()):04x}"
+    f"keycode {kc} = 0x{0x1000000|ord(c):07x} 0x{0x1000000|ord(c.upper()):07x}"
     for kc,c in zip(kcs,alpha))+"\n")
 EOF
 DISPLAY=:0 xmodmap /tmp/cyr.xmodmap

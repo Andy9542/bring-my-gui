@@ -56,14 +56,16 @@ start_stack() {  # assumes this display's stack is down
   echo "XVFB $!" >>"$PIDFILE"
   sleep 2
   setxkbmap -layout us -model pc105 2>/dev/null || true
-  # deterministic Cyrillic mapping on reserved keycodes (stage-3, gotchas)
+  # deterministic Cyrillic mapping on reserved keycodes (stage-3, gotchas).
+  # Keysyms MUST be Unicode-range 0x01000000|code (clients send "U0435" =
+  # 0x1000435); bare 0x0435 is a different, unmatched keysym.
   if command -v python3 >/dev/null && command -v xmodmap >/dev/null; then
     python3 - <<'PYEOF'
 kcs=[191,192,193,194,195,196,197,198,199,200,201,202,212,213,214,215,
      216,217,218,219,220,221,222,223,225,226,227,249,250,251,252,253,254]
 alpha="абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 open('/tmp/cyr.xmodmap','w').write("\n".join(
-    f"keycode {kc} = 0x{ord(c):04x} 0x{ord(c.upper()):04x}"
+    f"keycode {kc} = 0x{0x1000000|ord(c):07x} 0x{0x1000000|ord(c.upper()):07x}"
     for kc,c in zip(kcs,alpha))+"\n")
 PYEOF
     xmodmap /tmp/cyr.xmodmap 2>/dev/null || true

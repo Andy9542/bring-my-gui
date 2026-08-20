@@ -122,7 +122,7 @@ kcs=[191,192,193,194,195,196,197,198,199,200,201,202,212,213,214,215,
      216,217,218,219,220,221,222,223,225,226,227,249,250,251,252,253,254]
 alpha="абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 open('/tmp/cyr.xmodmap','w').write("\n".join(
-    f"keycode {kc} = 0x{ord(c):04x} 0x{ord(c.upper()):04x}"
+    f"keycode {kc} = 0x{0x1000000|ord(c):07x} 0x{0x1000000|ord(c.upper()):07x}"
     for kc,c in zip(kcs,alpha))+"\n")
 EOF
 DISPLAY=:0 xmodmap /tmp/cyr.xmodmap
