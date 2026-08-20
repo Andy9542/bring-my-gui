@@ -95,7 +95,8 @@ jobs:
             { command -v apt-get >/dev/null && apt-get install -y -qq ${{ matrix.app }}; } ||
             { command -v dnf     >/dev/null && dnf install -y -q ${{ matrix.app }}; } ||
             { command -v apk     >/dev/null && apk add --no-cache ${{ matrix.app }}; }
-            nohup env DISPLAY=:0 xclock -digital -update 1 </dev/null >/dev/null 2>&1 &
+            nohup env DISPLAY=:0 xclock -digital -update 1 -geometry 900x520+120+90 \
+              </dev/null >/dev/null 2>&1 &
             sleep 4
             DISPLAY=:0 xwininfo -root -tree | grep -i xclock'
 
@@ -103,7 +104,10 @@ jobs:
         continue-on-error: true
         run: |
           pipx install vncdotool || pip install --break-system-packages --quiet vncdotool
-          vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" capture screenshot-${{ matrix.tag }}.png
+          # Force a full framebuffer resend and let it arrive: a fresh client
+          # otherwise captures a partial update and the artifact comes out blank.
+          docker exec bmg x11vnc -R refresh -display :0 || true
+          vncdo -s 127.0.0.1::5900 -p "$VNC_PASS" pause 3 capture screenshot-${{ matrix.tag }}.png
           ls -l screenshot-${{ matrix.tag }}.png
 
       - uses: actions/upload-artifact@v4
