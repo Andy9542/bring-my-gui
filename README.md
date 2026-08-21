@@ -100,7 +100,9 @@ docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh watch   # prints the 
 Cursor polls for the token and signs itself in once you approve. Claude Code
 prints a paste-code URL (and may also try a loopback callback on a random
 port you cannot publish from inside) — open the printed URL, paste the code
-back. Details: [SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
+back. `mimeapps.list` is this user's `$HOME` only; under `--network host`
+pass `HOST_ADDR` if you use host-push. Details:
+[SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
 
 ## What the skill knows that a fresh agent does not
 

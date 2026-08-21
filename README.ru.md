@@ -99,7 +99,8 @@ docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh watch   # напеч�
 Cursor сам забирает токен, как только вы подтверждаете. Claude Code печатает
 ссылку для вставки кода (и может ещё стучаться на случайный localhost-порт,
 который изнутри не пробросить) — открываете напечатанную ссылку, код
-возвращаете в TUI. Подробности:
+возвращаете в TUI. `mimeapps.list` пишется в `$HOME` этого пользователя;
+при `--network host` для host-push передайте `HOST_ADDR`. Подробности:
 [SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
 
 ## Что skill знает, а свежий агент — нет

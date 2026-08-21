@@ -161,7 +161,14 @@ entry + `mimeapps.list` cover that (`xdg-mime query default
 x-scheme-handler/https` should be `bmg-open.desktop`; verified live); (4)
 non-root sandbox, shim landed in `~/.local/bin` off the app's PATH; (5) a
 vendored copy (`node_modules/open/xdg-open` inside Cursor) talks to `gio` /
-`$BROWSER` / `www-browser`, which the aliases still catch.
+`$BROWSER` / `www-browser`. `www-browser` is an alias; `gio` is not — it
+reaches the shim only via the default-browser desktop entry.
+
+**`mimeapps.list` is per-user; `--network host` fools host detection**
+`install` writes `~/.config/mimeapps.list` for this `$HOME`. A GUI running
+as another uid never reads it; the PATH shim still covers `xdg-open` on
+PATH. Under `--network host` the default-route "host" is the LAN router;
+pass `HOST_ADDR` if you use host-push (`HOST_PORT`).
 
 **Login succeeds in the host browser, the sandboxed app stays logged out**
 The redirect landed on the host. Polling apps (Cursor) pick the token up
@@ -170,7 +177,8 @@ with the SAME number both sides — Claude Code 2.1.238 used a random port
 (45781), not 54545, so from inside the container the paste-code TUI URL is
 the one that works. An `myapp://` handoff means the HOST's copy of the app
 consumed the login. Also: PKCE URLs expire in minutes; re-trigger rather
-than debugging the bridge.
+than debugging the bridge. A second `watch` skips URLs it already printed,
+so it waits for the new one.
 
 **In-sandbox browser, when you really do need one**
 Epiphany/WebKit dies with `bwrap: Creating new namespace failed: Operation not

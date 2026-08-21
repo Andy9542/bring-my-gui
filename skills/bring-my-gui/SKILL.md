@@ -206,11 +206,12 @@ install a browser in here (gotchas § In-sandbox browser).
 Two kinds of app, two moves:
 
 - **Desktop apps that launch a browser** (Cursor, other Electron, anything
-  that calls `xdg-open` / `gio` / `$BROWSER`). This is the case the bridge
-  exists for. `install` intercepts the launch — including
-  `/usr/bin/xdg-open` by absolute path, via the default-browser desktop
-  entry. Then `watch`, paste the URL into the chat. Cursor polls for the
-  token: once the user approves on the host, the app in here signs itself in.
+  that calls `xdg-open` or `$BROWSER`). `gio open` is intercepted too, but
+  through the default-browser desktop entry, not a `gio` alias. This is the
+  case the bridge exists for. `install` intercepts the launch — including
+  `/usr/bin/xdg-open` by absolute path, via that desktop entry. Then `watch`,
+  paste the URL into the chat. Cursor polls for the token: once the user
+  approves on the host, the app in here signs itself in.
 - **CLIs that print a URL** (Claude Code). Hand that URL in the chat; the
   user pastes a code back if the TUI asks. Claude Code 2.1.238 *also* called
   the shim, with a loopback callback on a **random** port — you cannot
@@ -227,8 +228,11 @@ command). `watch` prints either a URL that just arrived or one from the last
 60s. Give it to the user. Nothing is installed on the host.
 
 `$BROWSER` from `profile.d` does not reach this already-running shell —
-PATH `/usr/local/bin/xdg-open` does. `listen` on the host is opt-in and the
-user has to run it; you cannot.
+PATH `/usr/local/bin/xdg-open` does. `mimeapps.list` is written under this
+user's `$HOME`; an app running as someone else will not see it (the PATH
+shim still applies). `listen` on the host is opt-in and the user has to run
+it; you cannot. Under `--network host` the auto-detected host is the LAN
+router — pass `HOST_ADDR` if you ever use host-push.
 
 **Before any of this:** a token env var (`ANTHROPIC_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the user's machine,
