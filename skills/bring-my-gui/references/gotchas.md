@@ -156,19 +156,23 @@ need a container restart.
 In order of likelihood: (1) the app only printed the link in its TUI — Claude
 Code does that *and* may also call the shim; if `watch` is quiet, read the
 TUI; (2) the app started before `install` with a PATH that has no shim dir —
-relaunch it; (3) it calls `/usr/bin/xdg-open` by absolute path — the desktop
-entry + `mimeapps.list` cover that (`xdg-mime query default
-x-scheme-handler/https` should be `bmg-open.desktop`; verified live); (4)
+relaunch it; (3) it calls `/usr/bin/xdg-open` by absolute path — with
+`DISPLAY` the desktop entry + `mimeapps.list` cover that (`xdg-mime query
+default x-scheme-handler/https` should be `bmg-open.desktop`; verified live),
+without it xdg-open's own browser list reaches the `www-browser` alias; (4)
 non-root sandbox, shim landed in `~/.local/bin` off the app's PATH; (5) a
 vendored copy (`node_modules/open/xdg-open` inside Cursor) talks to `gio` /
 `$BROWSER` / `www-browser`. `www-browser` is an alias; `gio` is not — it
 reaches the shim only via the default-browser desktop entry.
 
 **`mimeapps.list` is per-user; `--network host` fools host detection**
-`install` writes `~/.config/mimeapps.list` for this `$HOME`. A GUI running
-as another uid never reads it; the PATH shim still covers `xdg-open` on
-PATH. Under `--network host` the default-route "host" is the LAN router;
-pass `HOST_ADDR` if you use host-push (`HOST_PORT`).
+`install` writes `mimeapps.list` under this user's `XDG_CONFIG_HOME` (or
+`~/.config`). A GUI running as another uid never reads it; the PATH shim
+still covers `xdg-open` on PATH, and `/tmp/bring-my-gui` plus the log are
+world-writable so that uid's captures still land. `uninstall` puts the file
+back as `install` found it; entries other apps added in between stay. Under
+`--network host` the default-route "host" is the LAN router; pass
+`HOST_ADDR` if you use host-push (`HOST_PORT`).
 
 **Login succeeds in the host browser, the sandboxed app stays logged out**
 The redirect landed on the host. Polling apps (Cursor) pick the token up

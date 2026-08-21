@@ -209,9 +209,10 @@ Two kinds of app, two moves:
   that calls `xdg-open` or `$BROWSER`). `gio open` is intercepted too, but
   through the default-browser desktop entry, not a `gio` alias. This is the
   case the bridge exists for. `install` intercepts the launch — including
-  `/usr/bin/xdg-open` by absolute path, via that desktop entry. Then `watch`,
-  paste the URL into the chat. Cursor polls for the token: once the user
-  approves on the host, the app in here signs itself in.
+  `/usr/bin/xdg-open` by absolute path (through that desktop entry when
+  `DISPLAY` is set, through the `www-browser` alias when it is not). Then
+  `watch`, paste the URL into the chat. Cursor polls for the token: once the
+  user approves on the host, the app in here signs itself in.
 - **CLIs that print a URL** (Claude Code). Hand that URL in the chat; the
   user pastes a code back if the TUI asks. Claude Code 2.1.238 *also* called
   the shim, with a loopback callback on a **random** port — you cannot
@@ -224,15 +225,17 @@ bash scripts/oauth-bridge.sh watch 180 60
 ```
 
 Trigger the login (click the app's button over VNC, or run its `login`
-command). `watch` prints either a URL that just arrived or one from the last
-60s. Give it to the user. Nothing is installed on the host.
+command). `watch` prints every URL not handed out yet — from the last 60s
+right away, else the next one to land — one per line, newest last. Give it
+to the user. Nothing is installed on the host.
 
 `$BROWSER` from `profile.d` does not reach this already-running shell —
 PATH `/usr/local/bin/xdg-open` does. `mimeapps.list` is written under this
-user's `$HOME`; an app running as someone else will not see it (the PATH
-shim still applies). `listen` on the host is opt-in and the user has to run
-it; you cannot. Under `--network host` the auto-detected host is the LAN
-router — pass `HOST_ADDR` if you ever use host-push.
+user's `$HOME`; an app running as someone else will not see it, but the PATH
+shim and the world-writable log still carry its URLs to you. `listen` on the
+host is opt-in and the user has to run it; you cannot. Under `--network host`
+the auto-detected host is the LAN router — pass `HOST_ADDR` if you ever use
+host-push.
 
 **Before any of this:** a token env var (`ANTHROPIC_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the user's machine,
