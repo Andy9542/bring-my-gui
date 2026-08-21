@@ -5,7 +5,7 @@
 #
 # Usage (in the sandbox):
 #   oauth-bridge.sh install              # capture every http(s) open request
-#   oauth-bridge.sh watch [SECONDS]      # block until the app emits a URL, print it
+#   oauth-bridge.sh watch [SECONDS] [LOOKBACK]  # print a recent URL, or wait for one
 #   oauth-bridge.sh url                  # print the last captured URL
 #   oauth-bridge.sh handler SCHEME 'CMD %U'   # route app://… deep links back to the app
 #   oauth-bridge.sh status | uninstall
@@ -27,9 +27,14 @@
 #  - non-http schemes are passed to the REAL xdg-open, never to the host: a
 #    cursor:// deep link belongs to the app in THIS sandbox, and the host's
 #    copy of the same app would grab it.
-#  - that delegation carries a depth guard. xdg-open's fallback chain calls
-#    x-www-browser, which is this shim: without the guard the pair fork-bombs
-#    the sandbox until the PID table is gone (gotchas § Browser login).
+#  - that delegation is name-keyed: only an invocation whose basename is
+#    xdg-open execs the real opener. Called as x-www-browser the shim exits,
+#    so xdg-open's own fallback chain (which calls x-www-browser) hits a dead
+#    end instead of turning around. BMG_DELEGATED is a second line of defence
+#    for the remaining bounce (gotchas § Browser login).
+#  - the URL is the first http(s) token in argv, not $1: browser-style callers
+#    put flags first (x-www-browser --new-window URL), and those callers are
+#    why the aliases exist.
 #  - the shim is a file on PATH, not an env var: the app is already running
 #    (and was started by another process), so $BROWSER can't reach it.
 #  - host address is resolved at install time and baked in: the shim is exec'd
@@ -43,6 +48,9 @@ DESKTOP_ID="bmg-open.desktop"
 # Names other launchers call instead of xdg-open (Debian alternatives, GNOME).
 ALIASES="xdg-open x-www-browser www-browser sensible-browser gnome-open"
 MARKER="bring-my-gui URL handoff shim"
+MIMEAPPS="$HOME/.config/mimeapps.list"
+MIMEAPPS_ORIG="$MIMEAPPS.bmg-orig"
+MIMEAPPS_ABSENT="$MIMEAPPS.bmg-absent"
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 
@@ -65,6 +73,8 @@ pick_bin_dir() {
 # Where the host is reachable from inside the sandbox. Docker Desktop provides
 # host.docker.internal; on plain Linux docker it exists only with
 # --add-host=host.docker.internal:host-gateway, so fall back to the gateway.
+# --network host makes the default route the LAN router, not the user's
+# machine: pass HOST_ADDR in that case, the guess will be wrong.
 detect_host_addr() {
   [ -n "${HOST_ADDR:-}" ] && { echo "$HOST_ADDR"; return; }
   if getent hosts host.docker.internal >/dev/null 2>&1; then
@@ -97,21 +107,24 @@ BMG_TOKEN='@TOKEN@'
 BMG_REAL='@REAL@'
 BMG_LOG=/tmp/bring-my-gui/open-urls.log
 
-url=$1
-[ -n "$url" ] || exit 0
-case "$url" in
-  http://*|https://*) ;;
-  *)
-    # Delegation must not come back to us: xdg-open's own fallback chain calls
-    # x-www-browser / sensible-browser, which are this shim — without the depth
-    # guard that pair forks until the sandbox dies.
-    [ -n "${BMG_DELEGATED:-}" ] && exit 0
-    [ -n "$BMG_REAL" ] && [ -x "$BMG_REAL" ] && { BMG_DELEGATED=1; export BMG_DELEGATED; exec "$BMG_REAL" "$@"; }
-    exit 0 ;;
-esac
+url=
+for a in "$@"; do
+  case "$a" in
+    http://*|https://*) url=$a; break ;;
+  esac
+done
+if [ -z "$url" ]; then
+  # No web URL in argv. Delegate file paths and app:// links only when we
+  # were invoked as xdg-open — as a browser alias this is not our job, and
+  # returning into xdg-open's fallback chain is the fork bomb.
+  [ "${0##*/}" = xdg-open ] || exit 0
+  [ -n "${BMG_DELEGATED:-}" ] && exit 0
+  [ -n "$BMG_REAL" ] && [ -x "$BMG_REAL" ] && { BMG_DELEGATED=1; export BMG_DELEGATED; exec "$BMG_REAL" "$@"; }
+  exit 0
+fi
 
 mkdir -p /tmp/bring-my-gui 2>/dev/null
-printf '%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$url" >>"$BMG_LOG" 2>/dev/null
+printf '%s\t%s\n' "$(date +%s 2>/dev/null || echo 0)" "$url" >>"$BMG_LOG" 2>/dev/null
 
 [ -n "$BMG_PORT" ] || exit 0   # no listener configured: the agent reads the log
 # One POST, whichever client this image happens to have. The URL travels as the
@@ -148,6 +161,26 @@ mimeapps_set() {  # $1=mime/scheme key  $2=desktop id
     /^\[Default Applications\]$/ && !done {print k "=" v; done=1}
   ' "$tmp" >"$f"
   rm -f "$tmp"
+}
+
+backup_mimeapps() {
+  [ -f "$MIMEAPPS_ORIG" ] || [ -f "$MIMEAPPS_ABSENT" ] && return 0
+  mkdir -p "$(dirname "$MIMEAPPS")" 2>/dev/null || return 1
+  if [ -f "$MIMEAPPS" ]; then
+    cp "$MIMEAPPS" "$MIMEAPPS_ORIG"
+  else
+    : >"$MIMEAPPS_ABSENT"
+  fi
+}
+
+# Predates this backup: drop only the keys we wrote, leave the rest.
+mimeapps_drop_ours() {
+  local f="$MIMEAPPS" tmp
+  [ -f "$f" ] || return 0
+  tmp=$(mktemp) || return 1
+  grep -v -E "=$(printf '%s' "$DESKTOP_ID" | sed 's/[][\.*^$/]/\\&/g')$" "$f" >"$tmp"
+  mv "$tmp" "$f"
+  [ -s "$f" ] || rm -f "$f"
 }
 
 write_desktop() {  # $1=id $2=name $3=exec $4=scheme list (semicolon separated)
@@ -195,6 +228,7 @@ cmd_install() {
 
   write_desktop "$DESKTOP_ID" "Host browser (bring-my-gui)" "$shim %u" \
     "x-scheme-handler/http;x-scheme-handler/https;text/html;" >/dev/null || true
+  backup_mimeapps
   mimeapps_set x-scheme-handler/http  "$DESKTOP_ID" 2>/dev/null || true
   mimeapps_set x-scheme-handler/https "$DESKTOP_ID" 2>/dev/null || true
   mimeapps_set text/html              "$DESKTOP_ID" 2>/dev/null || true
@@ -209,7 +243,7 @@ cmd_install() {
   echo "OAuth bridge installed: $shim"
   echo "  captures: $ALIASES  (+ $DESKTOP_ID as default browser)"
   echo "  URL log:  $URL_LOG"
-  echo "  \$BROWSER for new shells: $shim   (export it yourself in this one)"
+  echo "  \$BROWSER: login shells only (profile.d) — this shell: export BROWSER=$shim"
   local resolved; resolved=$(command -v xdg-open 2>/dev/null || true)
   if [ -n "$resolved" ] && ! grep -q "$MARKER" "$resolved" 2>/dev/null; then
     echo "WARN: xdg-open still resolves to $resolved — put $bin first: export PATH=$bin:\$PATH" >&2
@@ -217,22 +251,41 @@ cmd_install() {
   if [ -n "$port" ]; then
     echo "  host push: http://$host:$port  (user runs on the HOST:"
     echo "             BMG_TOKEN=$token PORT=$port bash scripts/oauth-bridge.sh listen )"
+    echo "  note: auto host is $host — under --network host that is the LAN router; pass HOST_ADDR"
     [ -n "$host" ] || echo "WARN: host address unknown — pass HOST_ADDR=… and re-run install" >&2
   else
     echo "  host push: off — default flow: 'oauth-bridge.sh watch', hand the URL to the user"
   fi
-  echo "An already-running app picks this up as-is; relaunch it only if it was started"
-  echo "with a PATH that has no $bin."
+  echo "  note: mimeapps.list is written under this user (\$HOME=$HOME); an app"
+  echo "        running as another user will not see it — PATH shim still applies"
 }
 
 # ------------------------------------------------------------------ watch ---
 
-cmd_watch() {  # $1 = seconds to wait (default 180)
-  local timeout="${1:-180}" before now deadline n
+cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (default 60)
+  local timeout="${1:-180}" lookback="${2:-60}" before now deadline n line epoch url found
   : >>"$URL_LOG" 2>/dev/null || die "cannot write $URL_LOG"
+  now=$(date +%s)
+  if [ -s "$URL_LOG" ] && [ "$lookback" -gt 0 ] 2>/dev/null; then
+    found=""
+    while IFS= read -r line; do
+      epoch=${line%%	*}
+      url=${line#*	}
+      case "$epoch" in
+        *[!0-9]*|'') continue ;;
+      esac
+      if [ "$epoch" -le "$now" ] && [ $((now - epoch)) -le "$lookback" ]; then
+        found=$url
+      fi
+    done <"$URL_LOG"
+    if [ -n "$found" ]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
   before=$(wc -l <"$URL_LOG")
-  deadline=$(( $(date +%s) + timeout ))
-  echo "watching $URL_LOG for a new URL (${timeout}s) — trigger the login now" >&2
+  deadline=$(( now + timeout ))
+  echo "watching $URL_LOG for a new URL (${timeout}s, lookback ${lookback}s) — trigger the login now" >&2
   while :; do
     n=$(wc -l <"$URL_LOG")
     if [ "$n" -gt "$before" ]; then
@@ -293,11 +346,22 @@ cmd_status() {
 cmd_uninstall() {
   local bin a; bin=$(pick_bin_dir 2>/dev/null) || return 0
   for a in $ALIASES; do
-    [ -L "$bin/$a" ] && rm -f "$bin/$a"
+    if [ -L "$bin/$a" ] || grep -q "$MARKER" "$bin/$a" 2>/dev/null; then
+      rm -f "$bin/$a"
+    fi
     [ -f "$bin/$a.bmg-orig" ] && mv "$bin/$a.bmg-orig" "$bin/$a"
   done
   rm -f "$bin/$SHIM_NAME" /etc/profile.d/bmg-browser.sh \
         /usr/share/applications/"$DESKTOP_ID" "$HOME/.local/share/applications/$DESKTOP_ID"
+  if [ -f "$MIMEAPPS_ORIG" ]; then
+    mv "$MIMEAPPS_ORIG" "$MIMEAPPS"
+    rm -f "$MIMEAPPS_ABSENT"
+  elif [ -f "$MIMEAPPS_ABSENT" ]; then
+    rm -f "$MIMEAPPS" "$MIMEAPPS_ABSENT"
+  else
+    mimeapps_drop_ours
+  fi
+  xdg-settings unset default-web-browser >/dev/null 2>&1 || true
   echo "OAuth bridge removed (URL log kept: $URL_LOG)"
 }
 
@@ -326,7 +390,8 @@ if not token:
 def host_open(url):
     for cmd in (["open", url], ["xdg-open", url], ["cmd", "/c", "start", "", url]):
         try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            threading.Thread(target=p.wait, daemon=True).start()
             return True
         except OSError:
             continue
@@ -347,7 +412,6 @@ class H(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=srv.shutdown, daemon=True).start()
 
 srv = http.server.ThreadingHTTPServer((bind, port), H)
-srv.timeout = timeout
 print(f"listening on {bind}:{port} ({'one-shot' if once else 'until killed'}, {timeout}s max)")
 threading.Timer(timeout, lambda: threading.Thread(target=srv.shutdown, daemon=True).start()).start()
 srv.serve_forever()
@@ -363,5 +427,5 @@ case "${1:-}" in
   status)    cmd_status ;;
   uninstall) cmd_uninstall ;;
   listen)    cmd_listen ;;
-  *) echo "usage: $0 install|watch [SEC]|url|handler SCHEME 'CMD %U'|status|uninstall   (host: $0 listen)" >&2; exit 2 ;;
+  *) echo "usage: $0 install|watch [SEC=180] [LOOKBACK=60]|url|handler SCHEME 'CMD %U'|status|uninstall   (host: $0 listen)" >&2; exit 2 ;;
 esac
