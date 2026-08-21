@@ -165,7 +165,9 @@ mimeapps_set() {  # $1=mime/scheme key  $2=desktop id
 }
 
 backup_mimeapps() {
-  [ -f "$MIMEAPPS_ORIG" ] || [ -f "$MIMEAPPS_ABSENT" ] && return 0
+  if [ -f "$MIMEAPPS_ORIG" ] || [ -f "$MIMEAPPS_ABSENT" ]; then
+    return 0
+  fi
   mkdir -p "$(dirname "$MIMEAPPS")" 2>/dev/null || return 1
   if [ -f "$MIMEAPPS" ]; then
     cp "$MIMEAPPS" "$MIMEAPPS_ORIG"

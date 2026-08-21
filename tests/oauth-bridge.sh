@@ -120,8 +120,9 @@ else
   bad "a non-web scheme does not multiply processes" "$before -> $after"
 fi
 
+bash "$BRIDGE" install >/dev/null
 bash "$BRIDGE" uninstall >/dev/null
-eq "uninstall leaves link handling as it was found" "$FINGERPRINT_BEFORE" "$(state_fingerprint)"
+eq "uninstall after double install restores link handling" "$FINGERPRINT_BEFORE" "$(state_fingerprint)"
 
 # ---------------------------------------------------------------- stage B ---
 # Delegation is invisible from the outside, so the real opener is swapped for
