@@ -148,7 +148,8 @@ if [ -z "$url" ]; then
   [ "${0##*/}" = xdg-open ] || exit 0
   # Depth cap: an app the real opener launched inherits BMG_DELEGATED and may
   # open its own non-web links once more; a bounce stops at two.
-  case "${BMG_DELEGATED:-0}" in ''|*[!0-9]*) BMG_DELEGATED=0 ;; esac
+  BMG_DELEGATED=${BMG_DELEGATED:-0}
+  case "$BMG_DELEGATED" in *[!0-9]*) BMG_DELEGATED=0 ;; esac
   [ "$BMG_DELEGATED" -ge 2 ] && exit 0
   [ -n "$BMG_REAL" ] && [ -x "$BMG_REAL" ] && { BMG_DELEGATED=$((BMG_DELEGATED + 1)); export BMG_DELEGATED; exec "$BMG_REAL" "$@"; }
   exit 0

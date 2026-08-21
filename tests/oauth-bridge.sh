@@ -264,11 +264,12 @@ chmod 755 "$STUB"
 bash "$BRIDGE" install >/dev/null
 hash -r
 
-xdg-open "mailto:delegated@example.com" >/dev/null 2>&1
-if grep -q "delegated@example.com" "$STUB_LOG" 2>/dev/null; then
-  ok "a non-web scheme reaches the real opener under the xdg-open name"
+# The stub is silent, so anything on stderr here is the shim's own noise.
+err=$(xdg-open "mailto:delegated@example.com" 2>&1 >/dev/null)
+if grep -q "delegated@example.com" "$STUB_LOG" 2>/dev/null && [ -z "$err" ]; then
+  ok "a non-web scheme reaches the real opener under the xdg-open name, quietly"
 else
-  bad "a non-web scheme reaches the real opener under the xdg-open name" "stub was never called"
+  bad "a non-web scheme reaches the real opener under the xdg-open name, quietly" "stub called: $(grep -c delegated "$STUB_LOG" 2>/dev/null), stderr: [$err]"
 fi
 
 : >"$STUB_LOG"
@@ -282,8 +283,8 @@ fi
 # An app the real opener launched inherits BMG_DELEGATED; its own non-web
 # opens must still reach the opener once (the guard is a depth cap, not a wall).
 : >"$STUB_LOG"
-BMG_DELEGATED=1 xdg-open "mailto:from-launched-app@example.com" >/dev/null 2>&1
-if grep -q "from-launched-app@example.com" "$STUB_LOG" 2>/dev/null; then
+err=$(BMG_DELEGATED=1 xdg-open "mailto:from-launched-app@example.com" 2>&1 >/dev/null)
+if grep -q "from-launched-app@example.com" "$STUB_LOG" 2>/dev/null && [ -z "$err" ]; then
   ok "an app launched through the opener can still open a non-web link"
 else
   bad "an app launched through the opener can still open a non-web link" "stub was never called"
