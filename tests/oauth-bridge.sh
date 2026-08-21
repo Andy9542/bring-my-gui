@@ -98,6 +98,12 @@ got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
 eq "watch reports a newer URL after a retry" "https://example.com/retry" "$got"
 
 clear_log
+xdg-open "https://example.com/peek" 2>/dev/null
+eq "url prints the last captured URL" "https://example.com/peek" "$(bash "$BRIDGE" url 2>/dev/null)"
+got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
+eq "watch lookback still sees a URL after url peek" "https://example.com/peek" "$got"
+
+clear_log
 if bash "$BRIDGE" watch 2 60 >/dev/null 2>&1; then
   bad "watch fails when the window holds nothing" "exit 0, expected non-zero"
 else

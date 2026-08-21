@@ -325,12 +325,8 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
 }
 
 cmd_url() {
-  local n line
   [ -s "$URL_LOG" ] || { echo "no URL captured yet" >&2; return 1; }
-  n=$(wc -l <"$URL_LOG")
-  line=$(tail -1 "$URL_LOG")
-  printf '%s\n%s\n' "$n" "$line" >"$SEEN_FILE"
-  printf '%s\n' "${line#*	}"
+  tail -1 "$URL_LOG" | cut -f2-
 }
 
 # ---------------------------------------------------------------- handler ---
@@ -390,7 +386,6 @@ cmd_uninstall() {
   else
     mimeapps_drop_ours
   fi
-  xdg-settings unset default-web-browser >/dev/null 2>&1 || true
   echo "OAuth bridge removed (URL log kept: $URL_LOG)"
 }
 
