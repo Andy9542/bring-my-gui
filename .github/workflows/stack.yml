@@ -106,8 +106,7 @@ jobs:
 
       - name: OAuth bridge behaviour suite
         # Same script a developer runs locally. It installs xdg-utils itself
-        # (the genuine opener has to exist before the shim records a delegate)
-        # and is expected red until the follow-up fix commit on this branch.
+        # (the genuine opener has to exist before the shim records a delegate).
         run: docker exec bmg bash /repo/tests/oauth-bridge.sh
 
       - name: Screenshot through a real VNC client
