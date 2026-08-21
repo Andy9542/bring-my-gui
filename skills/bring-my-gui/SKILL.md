@@ -200,48 +200,54 @@ have the client connect to the HOST port (left side of the pair).
 
 ## Browser login (OAuth) — the app wants a browser the sandbox lacks
 
-First launch of anything real (Cursor, Claude Code, `gh`, `gcloud`) ends at a
-login screen that tries to open a browser. Installing one in the sandbox is a
-bad trade — hundreds of MB, and its own sandbox fights the container (gotchas
-§ In-sandbox browser). Hand the URL to the browser the user already has:
+You run **inside** the sandbox. The user's browser is on the host. Do not
+install a browser in here (gotchas § In-sandbox browser).
+
+Two kinds of app, two moves:
+
+- **Desktop apps that launch a browser** (Cursor, other Electron, anything
+  that calls `xdg-open` / `gio` / `$BROWSER`). This is the case the bridge
+  exists for. `install` intercepts the launch — including
+  `/usr/bin/xdg-open` by absolute path, via the default-browser desktop
+  entry. Then `watch`, paste the URL into the chat. Cursor polls for the
+  token: once the user approves on the host, the app in here signs itself in.
+- **CLIs that print a URL** (Claude Code). Hand that URL in the chat; the
+  user pastes a code back if the TUI asks. Claude Code 2.1.238 *also* called
+  the shim, with a loopback callback on a **random** port — you cannot
+  publish that in advance from inside the container. The printed `code=true`
+  URL is the path that works from in here.
 
 ```bash
-bash scripts/oauth-bridge.sh install    # answers as xdg-open / x-www-browser / $BROWSER
-bash scripts/oauth-bridge.sh watch 180  # blocks, prints the URL the app just emitted
+bash scripts/oauth-bridge.sh install
+bash scripts/oauth-bridge.sh watch 180 60
 ```
 
 Trigger the login (click the app's button over VNC, or run its `login`
-command), take the URL `watch` printed, give it to the user in chat, keep
-watching the app while they click. Nothing is installed on the host.
+command). `watch` prints either a URL that just arrived or one from the last
+60s. Give it to the user. Nothing is installed on the host.
 
-If shuttling links by hand is too manual, the user can run
-`PORT=5999 bash scripts/oauth-bridge.sh listen` on the host (one-shot, needs
-python3) and you re-run `install` with `HOST_PORT=5999` — the URL then opens on
-their screen by itself. It stays opt-in on purpose: the default keeps a human
-between the sandbox and the host's browser.
+`$BROWSER` from `profile.d` does not reach this already-running shell —
+PATH `/usr/local/bin/xdg-open` does. `listen` on the host is opt-in and the
+user has to run it; you cannot.
 
-**Before building any of this, check whether the app takes a token instead** —
-`ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` run
-on the user's own machine, `GH_TOKEN` for gh. One env var beats a bridge.
+**Before any of this:** a token env var (`ANTHROPIC_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the user's machine,
+`GH_TOKEN`) beats a bridge.
 
-### Whether the login completes depends on its last step
+What happens after "Approve" still depends on the app's last step:
 
-The browser runs on the host, so everything after "Approve" happens there:
+- polls its API (Cursor) — wait, it signs itself in
+- shows a code to paste (Claude Code TUI, device-code: gh, az) — user pastes
+  into the app / your waiting prompt
+- redirects to `http://localhost:PORT` **of this sandbox** — needs that port
+  published with the same number both sides. Claude Code's browser path used
+  a random port (45781 once), not 54545. From inside, prefer the paste-code
+  URL
+- redirects to `myapp://` — not bridgeable; the host's copy of the app
+  swallows it
 
-| App's final step | Verdict | What you do |
-|---|---|---|
-| polls its own API for the token (Cursor) | just works | wait — the app signs itself in, no callback involved |
-| shows a code to copy (Claude Code `/login`, device-code flows: gh, az) | works | user pastes the code into the app in the VNC session |
-| redirects to `http://localhost:PORT` **of the sandbox** (Claude Code's browser path — 54545; gcloud) | needs the port | publish it with the SAME number both sides (`-p 54545:54545`), so `localhost:PORT` in the host browser lands in the sandbox |
-| redirects to an app scheme (`myapp://`) | not bridgeable | the host's own copy of the app swallows it; use the app's token/device-code mode |
-
-Deep links generated **inside** the sandbox are a different case and do work —
-route them back to the app:
+Deep links generated **inside** the sandbox are a different case and do work:
 `oauth-bridge.sh handler cursor '/opt/cursor/AppRun --no-sandbox %U'`.
-
-Some apps never call a browser at all: they print the URL in their own TUI
-(Claude Code does). `watch` times out; read the URL off the screen or the app's
-log instead — the rest of the flow is identical.
 
 ## Will the resolution be right on first connect?
 

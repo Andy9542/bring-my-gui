@@ -145,33 +145,32 @@ Only-2× → tiny; only-logical → blurry. Both or compromise at 1.5×.
 **The shim fork-bombs the sandbox (thousands of `xdg-open` processes)**
 Cost a container, live. `xdg-open`'s own fallback chain calls `x-www-browser` /
 `sensible-browser` — names the bridge also owns — so any NON-web URL bounces
-shim → real xdg-open → shim → … until the PID table is gone. Fix (already in
-the shim): a `BMG_DELEGATED` marker exported before exec'ing the real opener
-and checked on entry. Cleaning up after it happened: remove the shim symlinks
-FIRST — that stops new forks; killing alone loses the race and the count never
-drops. What remains afterwards is zombies reparented to PID 1, and when PID 1
-is `sleep infinity` (the usual `docker run -d` shape) nothing reaps them —
-only a container restart clears the table.
+shim → real xdg-open → shim → … until the PID table is gone. The shim now
+delegates only when invoked as `xdg-open`; as a browser alias it exits, so
+the chain hits a dead end. `BMG_DELEGATED` stays as a second line of defence.
+Cleanup if it still happens: remove the shim symlinks FIRST, then kill —
+killing alone loses the race. Leftover zombies under PID 1 `sleep infinity`
+need a container restart.
 
 **No URL ever lands in `/tmp/bring-my-gui/open-urls.log`**
-In order of likelihood: (1) the app prints the link in its own TUI instead of
-calling a browser (Claude Code does) — read it off the screen, the shim is not
-in that path; (2) the app started before `install` and resolved `xdg-open`
-from a PATH without the shim dir — relaunch it; (3) it calls
-`/usr/bin/xdg-open` by absolute path — the desktop entry + `mimeapps.list`
-that `install` writes cover that, verify with
-`xdg-mime query default x-scheme-handler/https`; (4) non-root sandbox, the
-shim landed in `~/.local/bin`, which the app's PATH doesn't have.
+In order of likelihood: (1) the app only printed the link in its TUI — Claude
+Code does that *and* may also call the shim; if `watch` is quiet, read the
+TUI; (2) the app started before `install` with a PATH that has no shim dir —
+relaunch it; (3) it calls `/usr/bin/xdg-open` by absolute path — the desktop
+entry + `mimeapps.list` cover that (`xdg-mime query default
+x-scheme-handler/https` should be `bmg-open.desktop`; verified live); (4)
+non-root sandbox, shim landed in `~/.local/bin` off the app's PATH; (5) a
+vendored copy (`node_modules/open/xdg-open` inside Cursor) talks to `gio` /
+`$BROWSER` / `www-browser`, which the aliases still catch.
 
 **Login succeeds in the host browser, the sandboxed app stays logged out**
-The redirect landed on the host — what happens next is decided by the app's
-flow (SKILL.md § Browser login has the table). Polling apps (Cursor) pick the
-token up within seconds. A `http://localhost:PORT` redirect needs that port
-published with the SAME number on both sides. An `myapp://` handoff means the
-HOST's copy of the app consumed the login; retrying inside the sandbox cannot
-fix it. Also check staleness: these URLs carry a PKCE challenge that expires
-in minutes — if the user clicked an old link, re-trigger and hand out a fresh
-one rather than debugging the bridge.
+The redirect landed on the host. Polling apps (Cursor) pick the token up
+within seconds. A `http://localhost:PORT` redirect needs that port published
+with the SAME number both sides — Claude Code 2.1.238 used a random port
+(45781), not 54545, so from inside the container the paste-code TUI URL is
+the one that works. An `myapp://` handoff means the HOST's copy of the app
+consumed the login. Also: PKCE URLs expire in minutes; re-trigger rather
+than debugging the bridge.
 
 **In-sandbox browser, when you really do need one**
 Epiphany/WebKit dies with `bwrap: Creating new namespace failed: Operation not

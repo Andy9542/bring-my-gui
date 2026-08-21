@@ -86,24 +86,21 @@ resolution and scale factor.
 
 ## Signing in to an app inside the container
 
-The first thing a real app wants is a login, and there is no browser in the
-container to log in with. Rather than installing one, the skill bridges the
-gap: a shim answers as `xdg-open` (and `x-www-browser`, and `$BROWSER`),
-captures the URL the app tried to open, and you finish the login in the
-browser you already have.
+The agent lives in the container. There is no browser. Desktop apps (Cursor,
+Electron) try to launch one anyway — that is the case the bridge is for. A
+shim answers as `xdg-open` / `x-www-browser` / `$BROWSER`, including when
+the app calls `/usr/bin/xdg-open` by absolute path. The agent runs `watch`
+and pastes the URL into the chat; you finish the login on the host.
 
 ```bash
 docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh install
 docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh watch   # prints the URL
 ```
 
-Open that URL on your machine, approve, and the app in the container is signed
-in. Verified with Cursor: its desktop login polls for the token, so it logs
-itself in the moment you approve on the host. Apps that show a code to paste
-(Claude Code) work the same way; apps that redirect to `http://localhost:PORT`
-need that port published. Which case you are in — and what to do about it —
-is a table in
-[SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
+Cursor polls for the token and signs itself in once you approve. Claude Code
+prints a paste-code URL (and may also try a loopback callback on a random
+port you cannot publish from inside) — open the printed URL, paste the code
+back. Details: [SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
 
 ## What the skill knows that a fresh agent does not
 
