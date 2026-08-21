@@ -5,7 +5,7 @@
 #
 # Usage (in the sandbox):
 #   oauth-bridge.sh install              # capture every http(s) open request
-#   oauth-bridge.sh watch [SECONDS] [LOOKBACK]  # print a recent URL, or wait for one
+#   oauth-bridge.sh watch [SECONDS] [LOOKBACK]  # print unseen recent URLs, or wait for one
 #   oauth-bridge.sh url                  # print the last captured URL
 #   oauth-bridge.sh handler SCHEME 'CMD %U'   # route app://… deep links back to the app
 #   oauth-bridge.sh status | uninstall
@@ -30,8 +30,9 @@
 #  - that delegation is name-keyed: only an invocation whose basename is
 #    xdg-open execs the real opener. Called as x-www-browser the shim exits,
 #    so xdg-open's own fallback chain (which calls x-www-browser) hits a dead
-#    end instead of turning around. BMG_DELEGATED is a second line of defence
-#    for the remaining bounce (gotchas § Browser login).
+#    end instead of turning around. BMG_DELEGATED counts the depth as a second
+#    line of defence: it stops at two, so an app the real opener launched
+#    (which inherits the variable) can still open its own non-web links.
 #  - the URL is the first http(s) token in argv, not $1: browser-style callers
 #    put flags first (x-www-browser --new-window URL), and those callers are
 #    why the aliases exist.
@@ -39,7 +40,17 @@
 #    (and was started by another process), so $BROWSER can't reach it.
 #  - host address is resolved at install time and baked in: the shim is exec'd
 #    by the app with the app's environment, not yours.
+#  - the log dir and log are world-writable: the agent installs as root, the
+#    GUI app often runs as someone else, and a capture that fails on EACCES
+#    fails silently inside the app.
 set -u
+
+# `docker exec` can arrive without HOME; xdg tools and this script both key
+# the per-user config on it, and XDG_CONFIG_HOME wins when it is set.
+[ -n "${HOME:-}" ] || HOME=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)
+HOME="${HOME:-/root}"; export HOME
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 
 LOG_DIR="/tmp/bring-my-gui"
 URL_LOG="$LOG_DIR/open-urls.log"
@@ -49,13 +60,17 @@ DESKTOP_ID="bmg-open.desktop"
 # Names other launchers call instead of xdg-open (Debian alternatives, GNOME).
 ALIASES="xdg-open x-www-browser www-browser sensible-browser gnome-open"
 MARKER="bring-my-gui URL handoff shim"
-MIMEAPPS="$HOME/.config/mimeapps.list"
-MIMEAPPS_ORIG="$MIMEAPPS.bmg-orig"
-MIMEAPPS_ABSENT="$MIMEAPPS.bmg-absent"
+MIMEAPPS="$CONFIG_HOME/mimeapps.list"
+MIMEAPPS_ORIG="$MIMEAPPS.bmg-orig"          # the file as install found it
+MIMEAPPS_ABSENT="$MIMEAPPS.bmg-absent"      # marker: install found no file
+MIMEAPPS_SNAP="$MIMEAPPS.bmg-installed"     # the file as this script last left it
+# Every mimeapps value this script writes matches this; uninstall removes them.
+OURS_RE='=bmg-(open|scheme-[^=]*)\.desktop;?$'
 
-mkdir -p "$LOG_DIR" 2>/dev/null || true
+mkdir -p "$LOG_DIR" 2>/dev/null && chmod 1777 "$LOG_DIR" 2>/dev/null
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+usage() { echo "usage: $0 install|watch [SEC=180] [LOOKBACK=60]|url|handler SCHEME 'CMD %U'|status|uninstall   (host: $0 listen)" >&2; }
 
 # ---------------------------------------------------------------- install ---
 
@@ -71,6 +86,15 @@ pick_bin_dir() {
   return 1
 }
 
+# Every dir a shim may already live in. uninstall and status look in all of
+# them, so they do not depend on the same BIN_DIR being passed again.
+installed_bin_dirs() {
+  local d
+  for d in "${BIN_DIR:-}" /usr/local/bin "$HOME/.local/bin" /usr/bin; do
+    [ -n "$d" ] && grep -q "$MARKER" "$d/$SHIM_NAME" 2>/dev/null && echo "$d"
+  done | awk '!seen[$0]++'
+}
+
 # Where the host is reachable from inside the sandbox. Docker Desktop provides
 # host.docker.internal; on plain Linux docker it exists only with
 # --add-host=host.docker.internal:host-gateway, so fall back to the gateway.
@@ -84,10 +108,13 @@ detect_host_addr() {
   ip route 2>/dev/null | awk '/^default/{print $3; exit}'
 }
 
-# The real handler, resolved BEFORE we shadow it (and never our own shim).
-detect_real_xdg_open() {
+# The real handler, resolved BEFORE we shadow it (and never our own shim). A
+# copy an earlier install moved aside wins: on a re-install the name on PATH
+# is already the shim. `type -aP` lists every PATH hit (bash's `command` has
+# no -a).
+detect_real_xdg_open() {  # $1 = dir the shim lives in
   local c
-  for c in $(command -v -a xdg-open 2>/dev/null) /usr/bin/xdg-open; do
+  for c in "$1/xdg-open.bmg-orig" $(type -aP xdg-open 2>/dev/null) /usr/bin/xdg-open; do
     [ -x "$c" ] || continue
     grep -q "$MARKER" "$c" 2>/dev/null && continue
     echo "$c"; return 0
@@ -111,7 +138,7 @@ BMG_LOG=/tmp/bring-my-gui/open-urls.log
 url=
 for a in "$@"; do
   case "$a" in
-    http://*|https://*) url=$a; break ;;
+    [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) url=$a; break ;;
   esac
 done
 if [ -z "$url" ]; then
@@ -119,12 +146,19 @@ if [ -z "$url" ]; then
   # were invoked as xdg-open — as a browser alias this is not our job, and
   # returning into xdg-open's fallback chain is the fork bomb.
   [ "${0##*/}" = xdg-open ] || exit 0
-  [ -n "${BMG_DELEGATED:-}" ] && exit 0
-  [ -n "$BMG_REAL" ] && [ -x "$BMG_REAL" ] && { BMG_DELEGATED=1; export BMG_DELEGATED; exec "$BMG_REAL" "$@"; }
+  # Depth cap: an app the real opener launched inherits BMG_DELEGATED and may
+  # open its own non-web links once more; a bounce stops at two.
+  case "${BMG_DELEGATED:-0}" in ''|*[!0-9]*) BMG_DELEGATED=0 ;; esac
+  [ "$BMG_DELEGATED" -ge 2 ] && exit 0
+  [ -n "$BMG_REAL" ] && [ -x "$BMG_REAL" ] && { BMG_DELEGATED=$((BMG_DELEGATED + 1)); export BMG_DELEGATED; exec "$BMG_REAL" "$@"; }
   exit 0
 fi
 
-mkdir -p /tmp/bring-my-gui 2>/dev/null
+# One log line per URL, whoever we run as: the agent (often root) reads what
+# the app (often not root) wrote, so the dir and the file are world-writable.
+url=$(printf '%s' "$url" | tr -d '\r\n')
+umask 0
+mkdir -p /tmp/bring-my-gui 2>/dev/null && chmod 1777 /tmp/bring-my-gui 2>/dev/null
 printf '%s\t%s\n' "$(date +%s 2>/dev/null || echo 0)" "$url" >>"$BMG_LOG" 2>/dev/null
 
 [ -n "$BMG_PORT" ] || exit 0   # no listener configured: the agent reads the log
@@ -149,13 +183,17 @@ SHIM
   chmod 755 "$1"
 }
 
+# ------------------------------------------------------------- mimeapps ---
 # xdg-open in "generic" mode (no desktop environment) reads mimeapps.list, so
 # apps that call the REAL opener by absolute path still land on the shim.
+
+re_escape() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
+
 mimeapps_set() {  # $1=mime/scheme key  $2=desktop id
-  local f="$HOME/.config/mimeapps.list" tmp
+  local f="$MIMEAPPS" tmp
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
   tmp=$(mktemp) || return 1
-  grep -v -E "^$(printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g')=" "$f" 2>/dev/null >"$tmp"
+  grep -v -E "^$(re_escape "$1")=" "$f" 2>/dev/null >"$tmp"
   grep -q '^\[Default Applications\]' "$tmp" || echo '[Default Applications]' >>"$tmp"
   awk -v k="$1" -v v="$2" '
     {print}
@@ -164,31 +202,74 @@ mimeapps_set() {  # $1=mime/scheme key  $2=desktop id
   rm -f "$tmp"
 }
 
+mimeapps_get() {  # $1=key $2=file → value or empty
+  grep -E "^$(re_escape "$1")=" "$2" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+same_file() { [ "$(md5sum <"$1" 2>/dev/null)" = "$(md5sum <"$2" 2>/dev/null)" ]; }
+
+# Taken once, before the first mimeapps_set. A file that already carries our
+# keys (an install that predates this backup, or markers lost) is not "as
+# found": what is left once our lines are gone is the backup, and nothing
+# left means the file is treated as absent.
 backup_mimeapps() {
   if [ -f "$MIMEAPPS_ORIG" ] || [ -f "$MIMEAPPS_ABSENT" ]; then
     return 0
   fi
   mkdir -p "$(dirname "$MIMEAPPS")" 2>/dev/null || return 1
-  if [ -f "$MIMEAPPS" ]; then
-    cp "$MIMEAPPS" "$MIMEAPPS_ORIG"
-  else
+  if [ ! -f "$MIMEAPPS" ]; then
     : >"$MIMEAPPS_ABSENT"
+  elif grep -q -E "$OURS_RE" "$MIMEAPPS"; then
+    grep -v -E "$OURS_RE" "$MIMEAPPS" >"$MIMEAPPS_ORIG"
+    grep -q '=' "$MIMEAPPS_ORIG" || { rm -f "$MIMEAPPS_ORIG"; : >"$MIMEAPPS_ABSENT"; }
+  else
+    cp "$MIMEAPPS" "$MIMEAPPS_ORIG"
   fi
 }
 
-# Predates this backup: drop only the keys we wrote, leave the rest.
+# What the file looks like when this script last wrote it — uninstall tells
+# "nobody touched it since" (backup goes back byte for byte) from "an app
+# registered its own handler since" (their lines stay, only ours go).
+snapshot_mimeapps() {
+  if [ -f "$MIMEAPPS" ]; then cp "$MIMEAPPS" "$MIMEAPPS_SNAP" 2>/dev/null; else rm -f "$MIMEAPPS_SNAP"; fi
+}
+
+# Drop every line whose value is ours; a file with no entries left goes away.
 mimeapps_drop_ours() {
   local f="$MIMEAPPS" tmp
   [ -f "$f" ] || return 0
   tmp=$(mktemp) || return 1
-  grep -v -E "=$(printf '%s' "$DESKTOP_ID" | sed 's/[][\.*^$/]/\\&/g')$" "$f" >"$tmp"
-  mv "$tmp" "$f"
-  [ -s "$f" ] || rm -f "$f"
+  grep -v -E "$OURS_RE" "$f" >"$tmp"
+  cat "$tmp" >"$f"; rm -f "$tmp"
+  grep -q '=' "$f" || rm -f "$f"
 }
+
+restore_mimeapps() {
+  local k v keys
+  if [ -f "$MIMEAPPS_SNAP" ] && [ -f "$MIMEAPPS" ] && ! same_file "$MIMEAPPS" "$MIMEAPPS_SNAP"; then
+    # Someone wrote here after us: keep their lines, take ours out, and put
+    # back whatever value of ours a key had before install.
+    keys=$(grep -E "$OURS_RE" "$MIMEAPPS" | cut -d= -f1 | awk '!seen[$0]++')
+    mimeapps_drop_ours
+    for k in $keys; do
+      v=$(mimeapps_get "$k" "$MIMEAPPS_ORIG")
+      [ -n "$v" ] && mimeapps_set "$k" "$v"
+    done
+  elif [ -f "$MIMEAPPS_ORIG" ]; then
+    mv "$MIMEAPPS_ORIG" "$MIMEAPPS"
+  elif [ -f "$MIMEAPPS_ABSENT" ]; then
+    rm -f "$MIMEAPPS"
+  else
+    mimeapps_drop_ours   # predates the backup: only our own keys go
+  fi
+  rm -f "$MIMEAPPS_ORIG" "$MIMEAPPS_ABSENT" "$MIMEAPPS_SNAP"
+}
+
+# ------------------------------------------------------- desktop entries ---
 
 write_desktop() {  # $1=id $2=name $3=exec $4=scheme list (semicolon separated)
   local dir
-  for dir in /usr/share/applications "$HOME/.local/share/applications"; do
+  for dir in /usr/share/applications "$DATA_HOME/applications"; do
     mkdir -p "$dir" 2>/dev/null || continue
     [ -w "$dir" ] || continue
     cat >"$dir/$1" <<EOF
@@ -207,10 +288,26 @@ EOF
   return 1
 }
 
+# Every entry this script ever wrote, from both dirs; the cache is rebuilt so
+# a removed entry cannot keep claiming its scheme through mimeinfo.cache.
+remove_desktop_entries() {
+  local dir had
+  for dir in /usr/share/applications "$DATA_HOME/applications"; do
+    had=$(ls "$dir"/bmg-scheme-*.desktop "$dir/$DESKTOP_ID" 2>/dev/null)
+    [ -n "$had" ] || continue
+    rm -f "$dir"/bmg-scheme-*.desktop "$dir/$DESKTOP_ID"
+    command -v update-desktop-database >/dev/null 2>&1 \
+      && update-desktop-database "$dir" >/dev/null 2>&1
+  done
+  return 0
+}
+
+# ---------------------------------------------------------------- install ---
+
 cmd_install() {
   local bin real host port token shim
   bin=$(pick_bin_dir) || die "no writable bin dir (tried BIN_DIR, /usr/local/bin, ~/.local/bin)"
-  real=$(detect_real_xdg_open)
+  real=$(detect_real_xdg_open "$bin")
   host=$(detect_host_addr)
   port="${HOST_PORT:-}"
   token="${BMG_TOKEN:-$(head -c 12 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')}"
@@ -236,6 +333,7 @@ cmd_install() {
   mimeapps_set x-scheme-handler/https "$DESKTOP_ID" 2>/dev/null || true
   mimeapps_set text/html              "$DESKTOP_ID" 2>/dev/null || true
   xdg-settings set default-web-browser "$DESKTOP_ID" >/dev/null 2>&1 || true
+  snapshot_mimeapps
 
   # CLIs that read $BROWSER instead of calling xdg-open: covers future shells,
   # not the app already running (relaunch it, or export by hand).
@@ -245,8 +343,9 @@ cmd_install() {
 
   echo "OAuth bridge installed: $shim"
   echo "  captures: $ALIASES  (+ $DESKTOP_ID as default browser)"
-  echo "  URL log:  $URL_LOG"
+  echo "  URL log:  $URL_LOG  (world-writable: the app may run as another user)"
   echo "  \$BROWSER: login shells only (profile.d) — this shell: export BROWSER=$shim"
+  [ -n "$real" ] || echo "  note: no real xdg-open found — non-web links (file paths, app://) go nowhere"
   local resolved; resolved=$(command -v xdg-open 2>/dev/null || true)
   if [ -n "$resolved" ] && ! grep -q "$MARKER" "$resolved" 2>/dev/null; then
     echo "WARN: xdg-open still resolves to $resolved — put $bin first: export PATH=$bin:\$PATH" >&2
@@ -260,63 +359,61 @@ cmd_install() {
     echo "  host push: off — default flow: 'oauth-bridge.sh watch', hand the URL to the user"
     echo "  note: if you later set HOST_PORT, auto host is ${host:-unknown} — under --network host that is the LAN router; pass HOST_ADDR"
   fi
-  echo "  note: mimeapps.list is written under this user (\$HOME=$HOME); an app"
-  echo "        running as another user will not see it — PATH shim still applies"
+  echo "  note: mimeapps.list is written under this user ($MIMEAPPS); an app"
+  echo "        running as another user will not see it — PATH shim and log still apply"
 }
 
 # ------------------------------------------------------------------ watch ---
 
+# Prints every URL not handed out before: from the last LOOKBACK seconds right
+# away, else the next one(s) to land within SECONDS. Oldest first, one per
+# line; the last line is the newest. Exit 1 when nothing came.
 cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (default 60)
-  local timeout="${1:-180}" lookback="${2:-60}" before now deadline n line epoch url found found_n found_line seen_n seen_line i actual
+  local timeout="${1:-180}" lookback="${2:-60}" before now deadline n i line epoch seen_n seen_line printed last_n
+  case "$timeout" in ''|*[!0-9]*) usage; return 2 ;; esac
+  case "$lookback" in ''|*[!0-9]*) usage; return 2 ;; esac
   : >>"$URL_LOG" 2>/dev/null || die "cannot write $URL_LOG"
-  seen_n=0 seen_line=""
+  chmod 666 "$URL_LOG" 2>/dev/null
+  # Where the previous watch stopped, trusted only while the log still holds
+  # that exact line at that exact number (a cleared log starts over).
+  seen_n=0
   if [ -f "$SEEN_FILE" ]; then
     seen_n=$(sed -n '1p' "$SEEN_FILE")
     seen_line=$(sed -n '2p' "$SEEN_FILE")
     case "$seen_n" in *[!0-9]*|'') seen_n=0 ;; esac
-  fi
-  n=$(wc -l <"$URL_LOG")
-  if [ "$seen_n" -gt 0 ]; then
-    if [ "$n" -lt "$seen_n" ]; then
-      seen_n=0
-    else
-      actual=$(sed -n "${seen_n}p" "$URL_LOG")
-      [ "$actual" = "$seen_line" ] || seen_n=0
+    if [ "$seen_n" -gt 0 ]; then
+      [ -n "$seen_line" ] && [ "$(sed -n "${seen_n}p" "$URL_LOG")" = "$seen_line" ] || seen_n=0
     fi
   fi
+  # Snapshot first, scan second: a line that lands during the scan is either
+  # in the scan or above `before` — never in a gap between the two.
+  before=$(wc -l <"$URL_LOG")
   now=$(date +%s)
-  if [ -s "$URL_LOG" ] && [ "$lookback" -gt 0 ] 2>/dev/null; then
-    found="" found_n=""
-    i=0
+  if [ "$lookback" -gt 0 ]; then
+    printed=0 last_n=0 i=0
     while IFS= read -r line; do
       i=$((i + 1))
       [ "$i" -gt "$seen_n" ] || continue
       epoch=${line%%	*}
-      url=${line#*	}
-      case "$epoch" in
-        *[!0-9]*|'') continue ;;
-      esac
-      if [ "$epoch" -le "$now" ] && [ $((now - epoch)) -le "$lookback" ]; then
-        found=$url
-        found_n=$i
-        found_line=$line
-      fi
+      case "$epoch" in *[!0-9]*|'') continue ;; esac
+      # A stamp ahead of `now` (clock stepped back) is recent, not future.
+      [ $((now - epoch)) -le "$lookback" ] || continue
+      printf '%s\n' "${line#*	}"
+      printed=$((printed + 1)); last_n=$i
     done <"$URL_LOG"
-    if [ -n "$found" ]; then
-      printf '%s\n%s\n' "$found_n" "$found_line" >"$SEEN_FILE"
-      printf '%s\n' "$found"
+    if [ "$printed" -gt 0 ]; then
+      printf '%s\n%s\n' "$last_n" "$(sed -n "${last_n}p" "$URL_LOG")" >"$SEEN_FILE"
       return 0
     fi
   fi
-  before=$(wc -l <"$URL_LOG")
   deadline=$(( now + timeout ))
   echo "watching $URL_LOG for a new URL (${timeout}s, lookback ${lookback}s) — trigger the login now" >&2
   while :; do
     n=$(wc -l <"$URL_LOG")
+    [ "$n" -ge "$before" ] || before=0     # log was cleared meanwhile
     if [ "$n" -gt "$before" ]; then
-      line=$(tail -1 "$URL_LOG")
-      printf '%s\n%s\n' "$n" "$line" >"$SEEN_FILE"
-      printf '%s\n' "${line#*	}"
+      tail -n "$((n - before))" "$URL_LOG" | cut -f2-
+      printf '%s\n%s\n' "$n" "$(sed -n "${n}p" "$URL_LOG")" >"$SEEN_FILE"
       return 0
     fi
     now=$(date +%s); [ "$now" -lt "$deadline" ] || break
@@ -343,7 +440,9 @@ cmd_handler() {
   id="bmg-scheme-$scheme.desktop"
   write_desktop "$id" "$scheme handler (bring-my-gui)" "$exec_line" \
     "x-scheme-handler/$scheme;" >/dev/null || die "no writable applications dir"
+  backup_mimeapps
   mimeapps_set "x-scheme-handler/$scheme" "$id" || true
+  snapshot_mimeapps
   echo "$scheme:// -> $exec_line"
 }
 
@@ -351,7 +450,7 @@ cmd_handler() {
 
 cmd_status() {
   local bin shim resolved
-  bin=$(pick_bin_dir 2>/dev/null) || bin=""
+  bin=$(installed_bin_dirs | head -1)
   shim="$bin/$SHIM_NAME"
   if [ -n "$bin" ] && [ -x "$shim" ]; then
     echo "shim: $shim"
@@ -371,23 +470,19 @@ cmd_status() {
 }
 
 cmd_uninstall() {
-  local bin a; bin=$(pick_bin_dir 2>/dev/null) || return 0
-  for a in $ALIASES; do
-    if [ -L "$bin/$a" ] || grep -q "$MARKER" "$bin/$a" 2>/dev/null; then
-      rm -f "$bin/$a"
-    fi
-    [ -f "$bin/$a.bmg-orig" ] && mv "$bin/$a.bmg-orig" "$bin/$a"
+  local bin a
+  installed_bin_dirs | while IFS= read -r bin; do
+    for a in $ALIASES; do
+      if [ -L "$bin/$a" ] || grep -q "$MARKER" "$bin/$a" 2>/dev/null; then
+        rm -f "$bin/$a"
+      fi
+      [ -f "$bin/$a.bmg-orig" ] && mv "$bin/$a.bmg-orig" "$bin/$a"
+    done
+    rm -f "$bin/$SHIM_NAME"
   done
-  rm -f "$bin/$SHIM_NAME" /etc/profile.d/bmg-browser.sh \
-        /usr/share/applications/"$DESKTOP_ID" "$HOME/.local/share/applications/$DESKTOP_ID"
-  if [ -f "$MIMEAPPS_ORIG" ]; then
-    mv "$MIMEAPPS_ORIG" "$MIMEAPPS"
-    rm -f "$MIMEAPPS_ABSENT"
-  elif [ -f "$MIMEAPPS_ABSENT" ]; then
-    rm -f "$MIMEAPPS" "$MIMEAPPS_ABSENT"
-  else
-    mimeapps_drop_ours
-  fi
+  rm -f /etc/profile.d/bmg-browser.sh
+  remove_desktop_entries
+  restore_mimeapps
   echo "OAuth bridge removed (URL log kept: $URL_LOG)"
 }
 
@@ -429,7 +524,7 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)).decode(errors="replace").strip()
         if token and self.headers.get("X-Bmg-Token", "") != token:
             self.send_response(403); self.end_headers(); return
-        if not body.startswith(("http://", "https://")):
+        if not body.lower().startswith(("http://", "https://")):
             self.send_response(400); self.end_headers(); return
         self.send_response(204); self.end_headers()
         print(f"opening: {body}", flush=True)
@@ -453,5 +548,5 @@ case "${1:-}" in
   status)    cmd_status ;;
   uninstall) cmd_uninstall ;;
   listen)    cmd_listen ;;
-  *) echo "usage: $0 install|watch [SEC=180] [LOOKBACK=60]|url|handler SCHEME 'CMD %U'|status|uninstall   (host: $0 listen)" >&2; exit 2 ;;
+  *) usage; exit 2 ;;
 esac
