@@ -175,14 +175,32 @@ back as `install` found it; entries other apps added in between stay. Under
 `HOST_ADDR` if you use host-push (`HOST_PORT`).
 
 **Login succeeds in the host browser, the sandboxed app stays logged out**
-The redirect landed on the host. Polling apps (Cursor) pick the token up
-within seconds. A `http://localhost:PORT` redirect needs that port published
-with the SAME number both sides — Claude Code 2.1.238 used a random port
-(45781), not 54545, so from inside the container the paste-code TUI URL is
-the one that works. An `myapp://` handoff means the HOST's copy of the app
-consumed the login. Also: PKCE URLs expire in minutes; re-trigger rather
-than debugging the bridge. A second `watch` skips URLs it already printed,
-so it waits for the new one.
+The redirect landed on the host; what happens next is the login's LAST step
+(SKILL.md § Browser login has the A/B/C/D table). Two land here most:
+
+- **Random loopback port (class C).** The app opens `http://127.0.0.1:PORT`
+  of the sandbox and waits for the callback on the same PORT — but PORT is a
+  *fresh random number every attempt* and its little server times out in a
+  few minutes. VS Code (GitHub sign-in, verified live) picked `42477`/`43871`; Claude Code
+  2.1.238 picked `45781`, not the documented 54545. You cannot pre-publish
+  it. The dance: trigger the login, `watch` the URL, read the live port
+  (`ss -ltn` or `/proc/net/tcp`), have the user publish that exact number
+  (`sbx ports … --publish PORT:PORT`) and open the URL — all before the
+  timeout. Miss it and the whole thing restarts with a new port. A pasteable
+  code path (Claude Code's `code=true` URL), where one exists, avoids the
+  race entirely — prefer it.
+- **Custom-scheme deep link (class D):** `cursor://`, `chatgpt://`,
+  `claude://`. The final redirect fires in the HOST browser and the OS hands
+  the deep link to the HOST's copy of the app — the container's copy never
+  sees it, so it cannot be bridged. Don't burn time on the browser; switch to the app's token path
+  (per each vendor's 2026 docs, not run here: `CURSOR_API_KEY` for `cursor-agent`, `OPENAI_API_KEY`
+  via ChatGPT's "Sign in another way", a Claude Code token for Anthropic).
+
+Repeated clicks rarely help: while one attempt is pending the app usually
+won't open a second URL, and its first server has already timed out — kill
+the app, relaunch, trigger once, catch the fresh port. Also: PKCE URLs
+expire in minutes; a second `watch` skips URLs it already printed, so it
+waits for the new one.
 
 **In-sandbox browser, when you really do need one**
 Epiphany/WebKit dies with `bwrap: Creating new namespace failed: Operation not

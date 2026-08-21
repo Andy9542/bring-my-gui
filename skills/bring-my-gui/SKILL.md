@@ -1,6 +1,6 @@
 ---
 name: bring-my-gui
-description: Forward any GUI application from a headless local sandbox (docker container, agent sbx) to the user's host screen over VNC — works with macOS, Windows, or Linux hosts. Use whenever the user wants to run, see, or interact with a graphical app inside a sandbox — Electron/Chromium apps, browsers, IDEs, Qt/GTK tools, installers, wizards — or when a GUI app fails with "cannot open display" / "cannot connect to X server". Trigger on phrases like "пробросить GUI из докера", "открыть приложение из песочницы на хосте", "запустить GUI в контейнере", "show the app window on my machine", "headless browser with visible display", "VNC into the sandbox", "демо GUI приложения в контейнере", "bring my gui", even if VNC is not explicitly mentioned. Covers the full stack (Xvfb + x11vnc + window manager + clipboard bridge), HiDPI/retina scaling, non-Latin keyboard input, latency tuning, port publishing how-to (docker -p / sbx ports), and per-OS client quirks. Also covers browser logins from a browserless sandbox (OAuth in Cursor, Claude Code, gh, gcloud): trigger on "залогиниться в приложении внутри контейнера", "войти в аккаунт из песочницы", "sign in inside the container", "OAuth in docker without a browser", "app wants to open a browser but there is none". Local use only — not for exposing GUI over a network.
+description: Forward any GUI application from a headless local sandbox (docker container, agent sbx) to the user's host screen over VNC — works with macOS, Windows, or Linux hosts. Use whenever the user wants to run, see, or interact with a graphical app inside a sandbox — Electron/Chromium apps, browsers, IDEs, Qt/GTK tools, installers, wizards — or when a GUI app fails with "cannot open display" / "cannot connect to X server". Trigger on phrases like "пробросить GUI из докера", "открыть приложение из песочницы на хосте", "запустить GUI в контейнере", "show the app window on my machine", "headless browser with visible display", "VNC into the sandbox", "демо GUI приложения в контейнере", "bring my gui", even if VNC is not explicitly mentioned. Covers the full stack (Xvfb + x11vnc + window manager + clipboard bridge), HiDPI/retina scaling, non-Latin keyboard input, latency tuning, port publishing how-to (docker -p / sbx ports), and per-OS client quirks. Also covers browser logins from a browserless sandbox (OAuth in Cursor, Claude Code, gh, gcloud): trigger on "залогиниться в приложении внутри контейнера", "войти в аккаунт из песочницы", "sign in inside the container", "OAuth in docker without a browser", "app wants to open a browser but there is none", "войти в Cursor / ChatGPT / Claude из контейнера", "sign in to Cursor or ChatGPT desktop in a sandbox". Local use only — not for exposing GUI over a network.
 ---
 
 # Bring My GUI — forward a sandbox app to the user's screen
@@ -203,58 +203,69 @@ have the client connect to the HOST port (left side of the pair).
 You run **inside** the sandbox. The user's browser is on the host. Do not
 install a browser in here (gotchas § In-sandbox browser).
 
-Two kinds of app, two moves:
+**Before anything, try a token — it beats the bridge.** If the app takes one,
+set it and skip the browser: `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`
+(Claude Code, from `claude setup-token` on the user's machine), `GH_TOKEN` (gh),
+`CURSOR_API_KEY` (Cursor's headless `cursor-agent` CLI — not the GUI editor),
+`OPENAI_API_KEY` via ChatGPT desktop's "Sign in another way" (reduced features).
+The Anthropic/`gh` token names are established here; the Cursor, ChatGPT and
+Claude Science specifics below are from each vendor's 2026 docs, **not run in
+this sandbox** — treat them as likely, not proven (PC2).
 
-- **Desktop apps that launch a browser** (Cursor, other Electron, anything
-  that calls `xdg-open` or `$BROWSER`). `gio open` is intercepted too, but
-  through the default-browser desktop entry, not a `gio` alias. This is the
-  case the bridge exists for. `install` intercepts the launch — including
-  `/usr/bin/xdg-open` by absolute path (through that desktop entry when
-  `DISPLAY` is set, through the `www-browser` alias when it is not). Then
-  `watch`, paste the URL into the chat. Cursor polls for the token: once the
-  user approves on the host, the app in here signs itself in.
-- **CLIs that print a URL** (Claude Code). Hand that URL in the chat; the
-  user pastes a code back if the TUI asks. Claude Code 2.1.238 *also* called
-  the shim, with a loopback callback on a **random** port — you cannot
-  publish that in advance from inside the container. The printed `code=true`
-  URL is the path that works from in here.
+When there is no token path, install the bridge, trigger the login, hand the
+captured URL to the user:
 
 ```bash
 bash scripts/oauth-bridge.sh install
-bash scripts/oauth-bridge.sh watch 180 60
+bash scripts/oauth-bridge.sh watch 180 60   # prints every unseen URL, newest last
 ```
 
-Trigger the login (click the app's button over VNC, or run its `login`
-command). `watch` prints every URL not handed out yet — from the last 60s
-right away, else the next one to land — one per line, newest last. Give it
-to the user. Nothing is installed on the host.
+`install` shadows `xdg-open` / `x-www-browser` / `$BROWSER` (and `/usr/bin/xdg-open`
+by absolute path — via the desktop entry when `DISPLAY` is set, via the
+`www-browser` alias when it is not) and `gio open` (through the default-browser
+desktop entry, not a `gio` alias). An Electron app's `shell.openExternal` lands
+there too. `watch` hands you the URL; nothing is installed on the host.
 
-`$BROWSER` from `profile.d` does not reach this already-running shell —
-PATH `/usr/local/bin/xdg-open` does. `mimeapps.list` is written under this
-user's `$HOME`; an app running as someone else will not see it, but the PATH
-shim and the world-writable log still carry its URLs to you. `listen` on the
-host is opt-in and the user has to run it; you cannot. Under `--network host`
-the auto-detected host is the LAN router — pass `HOST_ADDR` if you ever use
-host-push.
+### Whether the login finishes is decided by its LAST step
 
-**Before any of this:** a token env var (`ANTHROPIC_API_KEY`,
-`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on the user's machine,
-`GH_TOKEN`) beats a bridge.
+The browser ends up on the host, so everything after "Approve" happens there.
+Classify the callback — that classification *is* the process:
 
-What happens after "Approve" still depends on the app's last step:
+| Last step | Finishes from the container? | The move |
+|---|---|---|
+| **A** — app polls its API for the token | yes, by itself | wait after the user approves on the host |
+| **B** — shows a code to paste | yes | user pastes the code into the app / TUI |
+| **C** — redirect to `http://127.0.0.1:PORT` **of the sandbox** | yes, if the port is published | publish that exact port container→host, **same number**. A *random* port (VS Code, Claude Code) means catch it live and publish fast — gotchas § Login succeeds in the host browser |
+| **D** — redirect to a custom scheme (`cursor://`, `chatgpt://`, `claude://`) | no | the deep link opens the HOST's copy of the app, not this one — fall back to the app's token path |
 
-- polls its API (Cursor) — wait, it signs itself in
-- shows a code to paste (Claude Code TUI, device-code: gh, az) — user pastes
-  into the app / your waiting prompt
-- redirects to `http://localhost:PORT` **of this sandbox** — needs that port
-  published with the same number both sides. Claude Code's browser path used
-  a random port (45781 once), not 54545. From inside, prefer the paste-code
-  URL
-- redirects to `myapp://` — not bridgeable; the host's copy of the app
-  swallows it
-
-Deep links generated **inside** the sandbox are a different case and do work:
+Deep links generated **inside** the sandbox are the opposite case and DO work —
+route them back to the app in here:
 `oauth-bridge.sh handler cursor '/opt/cursor/AppRun --no-sandbox %U'`.
+
+### The desktop apps people ask for
+
+✓ = seen in this repo's own runs. The rest are each vendor's 2026 docs/reports,
+**not run in this sandbox** — treat the class as likely, not proven (PC2).
+
+| App | Class | Bridgeable to the app in here? | Best path |
+|---|---|---|---|
+| VS Code (GitHub sign-in) ✓ | C, random port | yes, fiddly | publish the live loopback port (same number) fast; or a `gh`/token |
+| Claude Code ✓ | B (+ C random) | yes | prefer the paste-code URL; better still `CLAUDE_CODE_OAUTH_TOKEN` |
+| Cursor (GUI editor) | D `cursor://` | no | not bridgeable to the editor; for automation use `cursor-agent` + `CURSOR_API_KEY` |
+| ChatGPT desktop | D deep link | no | "Sign in another way" → paste `OPENAI_API_KEY` (reduced features) |
+| Claude desktop | D custom scheme | no | use Claude Code (CLI) with a token instead |
+| Claude Science | local server; account sign-in = B | yes — publish 8000+8001 | see below |
+
+**Claude Science is a different animal — not an `xdg-open` case** (all of this is
+from Anthropic's Claude Science docs, 2026 — not run here). It *is* a local
+web server, and it is **x64/glibc only** (no arm64, no Alpine — the installer
+refuses), needs bubblewrap ≥0.8 + socat + unprivileged user namespaces, and
+serves its UI on fixed ports **8000** (web) and **8001** (preview = web+1).
+So: `claude-science serve --no-browser` bound to `0.0.0.0`, publish BOTH ports
+container→host with the same numbers, mint a fresh link with `claude-science url`
+(~3 min expiry) and open it on the host; if the account sign-in redirect can't
+return, click **Paste a code**. On an **arm64** sandbox it will not run at all —
+tell the user to install the native host build instead.
 
 ## Will the resolution be right on first connect?
 

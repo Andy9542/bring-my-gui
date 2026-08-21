@@ -1,7 +1,7 @@
 {
   "name": "bring-my-gui",
   "displayName": "Bring My GUI",
-  "description": "Forward a GUI app from a headless Linux sandbox (Docker container, agent sbx) to your host screen over VNC. Covers the Xvfb + openbox + x11vnc stack, HiDPI scaling, clipboard, non-Latin keyboard input and the traps that eat a debugging session.",
+  "description": "Forward a GUI app from a headless Linux sandbox (Docker container, agent sbx) to your host screen over VNC, and finish its browser login from the host. Covers the Xvfb + openbox + x11vnc stack, HiDPI scaling, clipboard, non-Latin keyboard input, and an OAuth bridge that captures the URL a desktop app (Cursor, Claude, Electron, VS Code) tries to open so you sign in on your own machine.",
   "version": "0.1.0",
   "author": {
     "name": "Andy95"
@@ -18,7 +18,13 @@
     "headless",
     "sandbox",
     "x11",
-    "remote-desktop"
+    "remote-desktop",
+    "oauth",
+    "login",
+    "sign-in",
+    "electron",
+    "cursor",
+    "browser-bridge"
   ],
   "skills": "./skills/"
 }
