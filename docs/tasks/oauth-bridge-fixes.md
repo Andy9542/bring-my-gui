@@ -1,6 +1,6 @@
 # OAuth bridge — fix what the roast found
 
-**Status:** validating
+**Status:** done
 **Branch:** oauth-bridge-fixes
 **Worktree:** .worktrees/oauth-bridge-fixes
 **Goal:** In a real sandbox: a browser invoked as `x-www-browser --new-window <url>` still lands in the URL log; `watch` returns a URL the app emitted just before `watch` started; after `uninstall` link handling is exactly as it was found. The listener carries no dead timeout line and reaps what it spawns, and the install output plus the docs state the real reach of `$BROWSER`, of a non-root `$HOME`, and of `--network host`. Claude Code completes a login in a disposable container through the bridge, and SKILL.md/README describe what that run actually did. CI goes red if delegation of non-web schemes silently stops working. Confirming the Claude Code half needs the user's Anthropic account — it cannot be shown by the diff alone.
@@ -227,8 +227,8 @@ Invariants:
 
 ### Assumptions check
 - AS1 — held — Claude Code 2.1.238 called the shim (loopback URL in the log)
-- AS2 — unverifiable — UI click not run; `/usr/bin/xdg-open` after install captured
-- AS3 — unverifiable — Anthropic paste-code not completed; chat handoff is the intended in-container Claude path
+- AS2 — held — confirmed by the user (2026-08-21); `/usr/bin/xdg-open` after install captured
+- AS3 — held — confirmed by the user (2026-08-21); chat handoff is the intended in-container Claude path
 
 ### Unknowns outcome
 - UK1 — resolved — both families: loopback on a random port (45781, not 54545) plus a `code=true` TUI URL
@@ -242,7 +242,7 @@ Review findings:
 - Minor (round 2, fixed): watch `tail -1` swallowed the older of two URLs in one poll; startup gap between scan and `before`; future stamp never handed out; `watch 30s` → bash arithmetic error; upper-case scheme and embedded newline.
 - Left as is: `x-www-browser --app=URL` (Chrome-style) not captured — no caller seen; `uninstall` after `BIN_DIR=/usr/bin` install now found via the candidate-dir scan.
 
-Verified by: round-2 harness on four images + Docker attacks above; Cursor UI click and Claude paste-code completion not re-run
+Verified by: round-2 harness on four images + Docker attacks + `/verify` CLI drive; Cursor UI click (AS2) and Claude paste-code completion (AS3) signed off by the user on 2026-08-21 — Goal confirmed, Status `done`
 
 ### Deviations from plan
 - PH2: four planned commits landed as one

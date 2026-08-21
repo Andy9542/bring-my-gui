@@ -152,10 +152,13 @@ CI runs the whole path on every push and weekly (distro packages get renamed —
 the weekly run is how we find out). Each job installs the stack from a clean
 image, starts the display, asserts the VNC port answers with an RFB handshake
 through the published port, and uploads a screenshot captured by a real VNC
-client. That paid off immediately: the first version of the workflow asked
-Fedora for `xorg-x11-apps` and got nothing, because Fedora 41 split `xclock`
-into its own package. The demo app is installed by binary now, like everything
-else here.
+client. The same job then runs the OAuth-bridge behaviour suite
+(`tests/oauth-bridge.sh` — the script you can run yourself in a throwaway
+container; it shadows `xdg-open` and runs as `nobody`, so never on a
+workstation). That paid off immediately: the first version of the workflow
+asked Fedora for `xorg-x11-apps` and got nothing, because Fedora 41 split
+`xclock` into its own package. The demo app is installed by binary now, like
+everything else here.
 
 | Image | Cold install | Notes |
 |---|---|---|
