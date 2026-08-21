@@ -140,6 +140,56 @@ Launch flags: `--no-sandbox --disable-gpu --disable-dev-shm-usage`
 See SKILL.md § resolution: screen `RES` = 2× logical AND app scale factor 2.
 Only-2× → tiny; only-logical → blurry. Both or compromise at 1.5×.
 
+## Browser login (OAuth)
+
+**The shim fork-bombs the sandbox (thousands of `xdg-open` processes)**
+Cost a container, live. `xdg-open`'s own fallback chain calls `x-www-browser` /
+`sensible-browser` — names the bridge also owns — so any NON-web URL bounces
+shim → real xdg-open → shim → … until the PID table is gone. Fix (already in
+the shim): a `BMG_DELEGATED` marker exported before exec'ing the real opener
+and checked on entry. Cleaning up after it happened: remove the shim symlinks
+FIRST — that stops new forks; killing alone loses the race and the count never
+drops. What remains afterwards is zombies reparented to PID 1, and when PID 1
+is `sleep infinity` (the usual `docker run -d` shape) nothing reaps them —
+only a container restart clears the table.
+
+**No URL ever lands in `/tmp/bring-my-gui/open-urls.log`**
+In order of likelihood: (1) the app prints the link in its own TUI instead of
+calling a browser (Claude Code does) — read it off the screen, the shim is not
+in that path; (2) the app started before `install` and resolved `xdg-open`
+from a PATH without the shim dir — relaunch it; (3) it calls
+`/usr/bin/xdg-open` by absolute path — the desktop entry + `mimeapps.list`
+that `install` writes cover that, verify with
+`xdg-mime query default x-scheme-handler/https`; (4) non-root sandbox, the
+shim landed in `~/.local/bin`, which the app's PATH doesn't have.
+
+**Login succeeds in the host browser, the sandboxed app stays logged out**
+The redirect landed on the host — what happens next is decided by the app's
+flow (SKILL.md § Browser login has the table). Polling apps (Cursor) pick the
+token up within seconds. A `http://localhost:PORT` redirect needs that port
+published with the SAME number on both sides. An `myapp://` handoff means the
+HOST's copy of the app consumed the login; retrying inside the sandbox cannot
+fix it. Also check staleness: these URLs carry a PKCE challenge that expires
+in minutes — if the user clicked an old link, re-trigger and hand out a fresh
+one rather than debugging the bridge.
+
+**In-sandbox browser, when you really do need one**
+Epiphany/WebKit dies with `bwrap: Creating new namespace failed: Operation not
+permitted` — its own sandbox wants privileges the container doesn't grant. Run
+it with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`,
+`WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`, and
+kill its "make me default?" dialog with
+`gsettings set org.gnome.Epiphany ask-for-default false` (gsettings ships in
+`libglib2.0-bin`). Chromium-family browsers need the same `--no-sandbox`
+treatment as any Electron app. Prefer the URL handoff anyway: a browser is
+hundreds of MB and one more process to keep alive.
+
+**The host listener is an open door while it runs**
+`oauth-bridge.sh listen` binds all interfaces — the sandbox reaches the host
+over the docker bridge, not loopback — so anyone on the same LAN can make the
+host's browser open a URL. Hence one-shot, a timeout, and a shared token by
+default. Don't promote it to a background service.
+
 ## Connectivity
 
 **User cannot connect (connection refused / timeout)**

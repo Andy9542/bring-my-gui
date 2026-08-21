@@ -1,6 +1,6 @@
 ---
 name: bring-my-gui
-description: Forward any GUI application from a headless local sandbox (docker container, agent sbx) to the user's host screen over VNC — works with macOS, Windows, or Linux hosts. Use whenever the user wants to run, see, or interact with a graphical app inside a sandbox — Electron/Chromium apps, browsers, IDEs, Qt/GTK tools, installers, wizards — or when a GUI app fails with "cannot open display" / "cannot connect to X server". Trigger on phrases like "пробросить GUI из докера", "открыть приложение из песочницы на хосте", "запустить GUI в контейнере", "show the app window on my machine", "headless browser with visible display", "VNC into the sandbox", "демо GUI приложения в контейнере", "bring my gui", even if VNC is not explicitly mentioned. Covers the full stack (Xvfb + x11vnc + window manager + clipboard bridge), HiDPI/retina scaling, non-Latin keyboard input, latency tuning, port publishing how-to (docker -p / sbx ports), and per-OS client quirks. Local use only — not for exposing GUI over a network.
+description: Forward any GUI application from a headless local sandbox (docker container, agent sbx) to the user's host screen over VNC — works with macOS, Windows, or Linux hosts. Use whenever the user wants to run, see, or interact with a graphical app inside a sandbox — Electron/Chromium apps, browsers, IDEs, Qt/GTK tools, installers, wizards — or when a GUI app fails with "cannot open display" / "cannot connect to X server". Trigger on phrases like "пробросить GUI из докера", "открыть приложение из песочницы на хосте", "запустить GUI в контейнере", "show the app window on my machine", "headless browser with visible display", "VNC into the sandbox", "демо GUI приложения в контейнере", "bring my gui", even if VNC is not explicitly mentioned. Covers the full stack (Xvfb + x11vnc + window manager + clipboard bridge), HiDPI/retina scaling, non-Latin keyboard input, latency tuning, port publishing how-to (docker -p / sbx ports), and per-OS client quirks. Also covers browser logins from a browserless sandbox (OAuth in Cursor, Claude Code, gh, gcloud): trigger on "залогиниться в приложении внутри контейнера", "войти в аккаунт из песочницы", "sign in inside the container", "OAuth in docker without a browser", "app wants to open a browser but there is none". Local use only — not for exposing GUI over a network.
 ---
 
 # Bring My GUI — forward a sandbox app to the user's screen
@@ -132,6 +132,8 @@ nohup setsid env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
 
 # 4. Verify the window actually mapped
 DISPLAY=:0 xwininfo -root -tree | grep -i <appname>
+
+# 5. Only if the app then demands a login (most do): § Browser login (OAuth)
 ```
 
 Then give the user the connect line **for their OS**:
@@ -195,6 +197,51 @@ the exact command for their sandbox type (they run it on the host, not you):
 
 If `5900` is already taken on the host, publish another one (`5901:5900`) and
 have the client connect to the HOST port (left side of the pair).
+
+## Browser login (OAuth) — the app wants a browser the sandbox lacks
+
+First launch of anything real (Cursor, Claude Code, `gh`, `gcloud`) ends at a
+login screen that tries to open a browser. Installing one in the sandbox is a
+bad trade — hundreds of MB, and its own sandbox fights the container (gotchas
+§ In-sandbox browser). Hand the URL to the browser the user already has:
+
+```bash
+bash scripts/oauth-bridge.sh install    # answers as xdg-open / x-www-browser / $BROWSER
+bash scripts/oauth-bridge.sh watch 180  # blocks, prints the URL the app just emitted
+```
+
+Trigger the login (click the app's button over VNC, or run its `login`
+command), take the URL `watch` printed, give it to the user in chat, keep
+watching the app while they click. Nothing is installed on the host.
+
+If shuttling links by hand is too manual, the user can run
+`PORT=5999 bash scripts/oauth-bridge.sh listen` on the host (one-shot, needs
+python3) and you re-run `install` with `HOST_PORT=5999` — the URL then opens on
+their screen by itself. It stays opt-in on purpose: the default keeps a human
+between the sandbox and the host's browser.
+
+**Before building any of this, check whether the app takes a token instead** —
+`ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` run
+on the user's own machine, `GH_TOKEN` for gh. One env var beats a bridge.
+
+### Whether the login completes depends on its last step
+
+The browser runs on the host, so everything after "Approve" happens there:
+
+| App's final step | Verdict | What you do |
+|---|---|---|
+| polls its own API for the token (Cursor) | just works | wait — the app signs itself in, no callback involved |
+| shows a code to copy (Claude Code `/login`, device-code flows: gh, az) | works | user pastes the code into the app in the VNC session |
+| redirects to `http://localhost:PORT` **of the sandbox** (Claude Code's browser path — 54545; gcloud) | needs the port | publish it with the SAME number both sides (`-p 54545:54545`), so `localhost:PORT` in the host browser lands in the sandbox |
+| redirects to an app scheme (`myapp://`) | not bridgeable | the host's own copy of the app swallows it; use the app's token/device-code mode |
+
+Deep links generated **inside** the sandbox are a different case and do work —
+route them back to the app:
+`oauth-bridge.sh handler cursor '/opt/cursor/AppRun --no-sandbox %U'`.
+
+Some apps never call a browser at all: they print the URL in their own TUI
+(Claude Code does). `watch` times out; read the URL off the screen or the app's
+log instead — the rest of the flow is identical.
 
 ## Will the resolution be right on first connect?
 
@@ -294,6 +341,8 @@ Symptoms → fixes in references/gotchas.md. The hits that cover ~90%:
   is a repo search (gotchas § App deps), not a Debian package name to copy
 - User on Windows/Linux can't connect → client table above, firewall on host
   (§ Connectivity)
+- App's login button does nothing / "no browser found" → § Browser login;
+  if the URL never reaches the log, gotchas § Browser login
 
 Read references/gotchas.md before improvising — most traps there were hit
 live and cost debugging time.

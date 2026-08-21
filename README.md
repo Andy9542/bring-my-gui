@@ -27,8 +27,8 @@ launches the app with the right toolkit flags, hands you a connect string for
 your OS, and already knows what to do when the picture flickers, the clipboard
 is one-way or non-Latin keys start dropping.
 
-**As two plain bash scripts** — if you just want a GUI out of a container and
-no agent is involved.
+**As plain bash scripts** — if you just want a GUI out of a container and no
+agent is involved.
 
 ## Try it in one container
 
@@ -84,6 +84,27 @@ GUI. Then say something like *"run the app from the sandbox on my screen,
 I'm on a 14-inch MacBook"* — the screen size matters, it decides the
 resolution and scale factor.
 
+## Signing in to an app inside the container
+
+The first thing a real app wants is a login, and there is no browser in the
+container to log in with. Rather than installing one, the skill bridges the
+gap: a shim answers as `xdg-open` (and `x-www-browser`, and `$BROWSER`),
+captures the URL the app tried to open, and you finish the login in the
+browser you already have.
+
+```bash
+docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh install
+docker exec gui-demo bash /opt/bmg/scripts/oauth-bridge.sh watch   # prints the URL
+```
+
+Open that URL on your machine, approve, and the app in the container is signed
+in. Verified with Cursor: its desktop login polls for the token, so it logs
+itself in the moment you approve on the host. Apps that show a code to paste
+(Claude Code) work the same way; apps that redirect to `http://localhost:PORT`
+need that port published. Which case you are in — and what to do about it —
+is a table in
+[SKILL.md § Browser login](skills/bring-my-gui/SKILL.md).
+
 ## What the skill knows that a fresh agent does not
 
 Every item below was hit live, cost a debugging round, and is now one line in
@@ -110,6 +131,10 @@ the skill instead:
   remembered from another one.
 - **`pkill -f x11vnc` kills your own shell**, because the pattern matches its
   command line too.
+- **A browser shim that fork-bombs the container** — `xdg-open`'s own fallback
+  chain calls `x-www-browser`, so a shim registered as both bounces between
+  them until the PID table is gone. The bridge carries a depth guard, and the
+  cleanup order matters: remove the shim first, kill second.
 
 Full list with symptoms and fixes:
 [`references/gotchas.md`](skills/bring-my-gui/references/gotchas.md).
@@ -178,6 +203,7 @@ skills/bring-my-gui/
   references/gotchas.md    symptom → cause → fix, all live-debugged
   scripts/setup.sh         installs the stack by binary (apt/dnf/yum/apk)
   scripts/gui-stack.sh     start | stop | restart | status
+  scripts/oauth-bridge.sh  browser login without a browser: install | watch | listen
 ```
 
 ## License
@@ -194,4 +220,6 @@ openbox, autocutsel, VNC into a Docker container, Docker Sandbox / `sbx` GUI,
 remote desktop for a dev sandbox, run Firefox / Chromium / Electron in a
 container and see the window, Electron `--no-sandbox` in Docker,
 `WAYLAND_DISPLAY` unset, `DISPLAY=:0`, macOS Screen Sharing, TightVNC,
-TigerVNC, Remmina, agent skill, Cursor skill, Claude skill.
+TigerVNC, Remmina, agent skill, Cursor skill, Claude skill, OAuth login from a
+container with no browser, `xdg-open` handoff to the host browser, sign in to
+Cursor inside Docker, Claude Code login on a headless box.
