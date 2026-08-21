@@ -104,35 +104,11 @@ jobs:
             sleep 4
             DISPLAY=:0 xwininfo -root -tree | grep -i xclock'
 
-      - name: OAuth bridge captures what the app tried to open
-        run: |
-          # A real xdg-open has to exist BEFORE install: the shim records it as
-          # its delegate for non-web schemes, and the next step needs that
-          # fallback chain armed to test anything.
-          docker exec bmg sh -c '
-            command -v xdg-open >/dev/null ||
-              { command -v apt-get >/dev/null && apt-get install -y -qq xdg-utils; } ||
-              { command -v dnf     >/dev/null && dnf install -y -q xdg-utils; } ||
-              { command -v apk     >/dev/null && apk add --no-cache xdg-utils; } || true
-            command -v xdg-open || echo "no xdg-utils here — the shim stands alone"'
-          docker exec bmg bash "$SKILL/scripts/oauth-bridge.sh" install
-          docker exec bmg sh -c '
-            xdg-open "https://example.com/ci-login?challenge=abc&uuid=1"
-            grep -q "example.com/ci-login" /tmp/bring-my-gui/open-urls.log'
-
-      - name: A non-web scheme does not bounce between the shim and xdg-open
-        # Regression guard for a live fork bomb: xdg-open's own fallback chain
-        # calls x-www-browser, which is the shim. Zombies stay in /proc, so
-        # counting the whole dir catches the explosion even after they die.
-        run: |
-          docker exec bmg bash "$SKILL/scripts/oauth-bridge.sh" status
-          docker exec bmg sh -c '
-            before=$(ls -d /proc/[0-9]* | wc -l)
-            timeout 10 xdg-open "mailto:ci@example.com" || true
-            sleep 2
-            after=$(ls -d /proc/[0-9]* | wc -l)
-            echo "processes: $before -> $after"
-            [ "$after" -le $((before + 20)) ] || { echo "process explosion"; exit 1; }'
+      - name: OAuth bridge behaviour suite
+        # Same script a developer runs locally. It installs xdg-utils itself
+        # (the genuine opener has to exist before the shim records a delegate)
+        # and is expected red until the follow-up fix commit on this branch.
+        run: docker exec bmg bash /repo/tests/oauth-bridge.sh
 
       - name: Screenshot through a real VNC client
         continue-on-error: true
