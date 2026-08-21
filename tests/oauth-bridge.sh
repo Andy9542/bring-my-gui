@@ -90,6 +90,13 @@ sleep 2
 got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
 eq "watch reports a url from just before it started" "https://example.com/just-before" "$got"
 
+got=$(bash "$BRIDGE" watch 2 60 2>/dev/null || true)
+eq "watch does not re-hand a URL it already printed" "" "$got"
+
+xdg-open "https://example.com/retry" 2>/dev/null
+got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
+eq "watch reports a newer URL after a retry" "https://example.com/retry" "$got"
+
 clear_log
 if bash "$BRIDGE" watch 2 60 >/dev/null 2>&1; then
   bad "watch fails when the window holds nothing" "exit 0, expected non-zero"

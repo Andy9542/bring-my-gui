@@ -43,6 +43,7 @@ set -u
 
 LOG_DIR="/tmp/bring-my-gui"
 URL_LOG="$LOG_DIR/open-urls.log"
+SEEN_FILE="$LOG_DIR/watch.seen"
 SHIM_NAME="bmg-open"
 DESKTOP_ID="bmg-open.desktop"
 # Names other launchers call instead of xdg-open (Debian alternatives, GNOME).
@@ -255,6 +256,7 @@ cmd_install() {
     [ -n "$host" ] || echo "WARN: host address unknown — pass HOST_ADDR=… and re-run install" >&2
   else
     echo "  host push: off — default flow: 'oauth-bridge.sh watch', hand the URL to the user"
+    echo "  note: if you later set HOST_PORT, auto host is ${host:-unknown} — under --network host that is the LAN router; pass HOST_ADDR"
   fi
   echo "  note: mimeapps.list is written under this user (\$HOME=$HOME); an app"
   echo "        running as another user will not see it — PATH shim still applies"
@@ -263,12 +265,30 @@ cmd_install() {
 # ------------------------------------------------------------------ watch ---
 
 cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (default 60)
-  local timeout="${1:-180}" lookback="${2:-60}" before now deadline n line epoch url found
+  local timeout="${1:-180}" lookback="${2:-60}" before now deadline n line epoch url found found_n found_line seen_n seen_line i actual
   : >>"$URL_LOG" 2>/dev/null || die "cannot write $URL_LOG"
+  seen_n=0 seen_line=""
+  if [ -f "$SEEN_FILE" ]; then
+    seen_n=$(sed -n '1p' "$SEEN_FILE")
+    seen_line=$(sed -n '2p' "$SEEN_FILE")
+    case "$seen_n" in *[!0-9]*|'') seen_n=0 ;; esac
+  fi
+  n=$(wc -l <"$URL_LOG")
+  if [ "$seen_n" -gt 0 ]; then
+    if [ "$n" -lt "$seen_n" ]; then
+      seen_n=0
+    else
+      actual=$(sed -n "${seen_n}p" "$URL_LOG")
+      [ "$actual" = "$seen_line" ] || seen_n=0
+    fi
+  fi
   now=$(date +%s)
   if [ -s "$URL_LOG" ] && [ "$lookback" -gt 0 ] 2>/dev/null; then
-    found=""
+    found="" found_n=""
+    i=0
     while IFS= read -r line; do
+      i=$((i + 1))
+      [ "$i" -gt "$seen_n" ] || continue
       epoch=${line%%	*}
       url=${line#*	}
       case "$epoch" in
@@ -276,9 +296,12 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
       esac
       if [ "$epoch" -le "$now" ] && [ $((now - epoch)) -le "$lookback" ]; then
         found=$url
+        found_n=$i
+        found_line=$line
       fi
     done <"$URL_LOG"
     if [ -n "$found" ]; then
+      printf '%s\n%s\n' "$found_n" "$found_line" >"$SEEN_FILE"
       printf '%s\n' "$found"
       return 0
     fi
@@ -289,7 +312,9 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
   while :; do
     n=$(wc -l <"$URL_LOG")
     if [ "$n" -gt "$before" ]; then
-      tail -n "$((n - before))" "$URL_LOG" | cut -f2-
+      line=$(tail -1 "$URL_LOG")
+      printf '%s\n%s\n' "$n" "$line" >"$SEEN_FILE"
+      printf '%s\n' "${line#*	}"
       return 0
     fi
     now=$(date +%s); [ "$now" -lt "$deadline" ] || break
@@ -300,8 +325,12 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
 }
 
 cmd_url() {
+  local n line
   [ -s "$URL_LOG" ] || { echo "no URL captured yet" >&2; return 1; }
-  tail -1 "$URL_LOG" | cut -f2-
+  n=$(wc -l <"$URL_LOG")
+  line=$(tail -1 "$URL_LOG")
+  printf '%s\n%s\n' "$n" "$line" >"$SEEN_FILE"
+  printf '%s\n' "${line#*	}"
 }
 
 # ---------------------------------------------------------------- handler ---
