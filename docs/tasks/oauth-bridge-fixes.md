@@ -213,9 +213,11 @@ Extra attacks, held: `HOME` unset → `status`/`watch` run; `XDG_CONFIG_HOME=/tm
 
 Not re-run: Cursor UI click (AS2), Claude paste-code completion (AS3) — unchanged since round 1, need the user's account / VNC.
 
+**Round 2b (`/verify`, driving the merged CLI in ubuntu:24.04 + fedora:41, `DISPLAY=:0`):** install → `status` → app as `nobody` opens the login URL via `x-www-browser --new-window` → `watch 5 60` prints it, second `watch` exits 1 → two URLs → both printed oldest first → `url` peeks → `xdg-open mailto:` delegated (procs 4→4) → `handler cursor` + `xdg-open cursor://…` reaches the app → probes (`watch 30s`/`abc` → usage exit 2; `HOME` unset; double install; bare `xdg-open`; `--app=URL`; `sensible-browser /etc/hostname`; URL with space/quote/`$(id)`; log cleared under a waiting `watch`) → uninstall leaves `xdg-mime` empty, no desktop files, no `~/.config` entries, `cursor://` no longer reaches the app → upgrade from the origin/main install is clean. **One FAIL found and fixed:** the depth guard printed `[: Illegal number:` on every non-web call (`6cfe77e`); suite now asserts silent delegation. Re-driven after the fix: clean on both images.
+
 ## Conclusion
 
-Outcome: Deterministic bridge contract held — round 1 14/14, round 2 32/32 on all four CI images; Claude login not driven to a stored token, Cursor UI click (AS2) deferred. HEAD `041abc2` (round 2 on top of `93b17db`).
+Outcome: Deterministic bridge contract held — round 1 14/14, round 2 32/32 on all four CI images, CLI driven end-to-end in two of them; Claude login not driven to a stored token, Cursor UI click (AS2) deferred. HEAD `6cfe77e` (round 2 + 2b on top of `93b17db`).
 
 Invariants:
 - IV1 — harness: one invocation, one log line; URL after a flag captured
@@ -236,6 +238,7 @@ Review findings:
 - Critical: none
 - Important (round 1): `backup_mimeapps` skip was `A || B && C` — rewritten as `if`; harness round-trips double install. Earlier rounds: docs honesty, `gio` not an alias, `watch` watermark, `url` peek, dead `xdg-settings unset`, leftover CI «expected red».
 - Important (round 2, all fixed in `47307be`): capture silently dropped for a non-root app (root-owned 0755 log dir) while docs claimed "PATH shim still applies"; `command -v -a` is invalid in bash, so the real opener was found only at `/usr/bin/xdg-open` and a double install with the opener in the shim's dir lost delegation; uninstall left `bmg-scheme-*.desktop` and a stale `mimeinfo.cache` (Fedora kept answering `bmg-open.desktop`); install over a pre-backup install "restored" dangling defaults; restore wiped registrations other apps made after install; `BMG_DELEGATED` leaked into apps the real opener launched and blocked their non-web opens; `HOME` unset crashed every subcommand; harness never exercised the desktop-entry path (mutation stayed green) and failed on images without xdg-utils.
+- Important (round 2b, `/verify`, fixed in `6cfe77e`): the new depth guard left `BMG_DELEGATED` unset and printed `[: Illegal number:` to stderr on every non-web call; the suite had discarded stderr.
 - Minor (round 2, fixed): watch `tail -1` swallowed the older of two URLs in one poll; startup gap between scan and `before`; future stamp never handed out; `watch 30s` → bash arithmetic error; upper-case scheme and embedded newline.
 - Left as is: `x-www-browser --app=URL` (Chrome-style) not captured — no caller seen; `uninstall` after `BIN_DIR=/usr/bin` install now found via the candidate-dir scan.
 
