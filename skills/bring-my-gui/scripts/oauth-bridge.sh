@@ -387,6 +387,14 @@ cmd_install() {
 # Prints every URL not handed out before: from the last LOOKBACK seconds right
 # away, else the next one(s) to land within SECONDS. Oldest first, one per
 # line; the last line is the newest. Exit 1 when nothing came.
+# Where watch stopped: line number + that line. Unlinked first — a seen file
+# another uid left in the sticky dir cannot be re-opened with O_CREAT under
+# fs.protected_regular, and a stale watermark would hand URLs out twice.
+mark_seen() {  # $1 = line number
+  rm -f "$SEEN_FILE" 2>/dev/null
+  printf '%s\n%s\n' "$1" "$(sed -n "${1}p" "$URL_LOG")" >"$SEEN_FILE" 2>/dev/null
+}
+
 cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (default 60)
   local timeout="${1:-180}" lookback="${2:-60}" before now deadline n i line epoch seen_n seen_line printed last_n
   case "$timeout" in ''|*[!0-9]*) usage; return 2 ;; esac
@@ -421,7 +429,7 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
       printed=$((printed + 1)); last_n=$i
     done <"$URL_LOG"
     if [ "$printed" -gt 0 ]; then
-      printf '%s\n%s\n' "$last_n" "$(sed -n "${last_n}p" "$URL_LOG")" >"$SEEN_FILE"
+      mark_seen "$last_n"
       return 0
     fi
   fi
@@ -432,7 +440,7 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
     [ "$n" -ge "$before" ] || before=0     # log was cleared meanwhile
     if [ "$n" -gt "$before" ]; then
       tail -n "$((n - before))" "$URL_LOG" | cut -f2-
-      printf '%s\n%s\n' "$n" "$(sed -n "${n}p" "$URL_LOG")" >"$SEEN_FILE"
+      mark_seen "$n"
       return 0
     fi
     now=$(date +%s); [ "$now" -lt "$deadline" ] || break

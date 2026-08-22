@@ -160,6 +160,14 @@ asked Fedora for `xorg-x11-apps` and got nothing, because Fedora 41 split
 `xclock` into its own package. The demo app is installed by binary now, like
 everything else here.
 
+The same job runs locally: `tests/ci-local.sh` mirrors the workflow step for
+step on the same images, in parallel, and prints one verdict per image (a
+single image: `tests/ci-local.sh alpine:3.21`; `KEEP=1` leaves a failed
+container up). It also sets `fs.protected_regular=2` for the duration, the
+way GitHub's ubuntu runners have it, and restores it afterwards — that one
+sysctl is how the bridge suite once passed on a laptop while CI was red
+(`PROTECTED_REGULAR=skip` leaves the kernel alone).
+
 | Image | Cold install | Notes |
 |---|---|---|
 | `ubuntu:24.04` | ~2.5 min | the file index (`apt-file`) is downloaded once, to resolve the last binaries |

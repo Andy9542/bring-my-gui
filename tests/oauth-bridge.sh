@@ -165,6 +165,16 @@ if as_nobody "xdg-open https://example.com/nonroot" >/dev/null 2>&1; rc=$?; [ "$
   else
     note "busybox dd — root append into a non-root-created log not asserted"
   fi
+  # A watch run by another uid leaves watch.seen behind; root's watermark must
+  # still land (rm + write — a plain > is refused under fs.protected_regular).
+  clear_log
+  xdg-open "https://example.com/seen-by-nobody" 2>/dev/null
+  as_nobody "bash $BRIDGE watch 2 60" >/dev/null 2>&1
+  xdg-open "https://example.com/after-nobody-watch" 2>/dev/null
+  got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
+  eq "root's watch skips what a non-root watch already handed out" "https://example.com/after-nobody-watch" "$got"
+  got=$(bash "$BRIDGE" watch 2 60 2>/dev/null || true)
+  eq "root's watermark lands over a seen file another uid left" "" "$got"
 else
   note "no su/chroot here — non-root capture not asserted"
 fi

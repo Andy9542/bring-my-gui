@@ -181,8 +181,10 @@ open of a file in a sticky world-writable dir unless the caller owns the
 file or the dir — root included, and `>>` in a shell always carries O_CREAT.
 `/tmp/bring-my-gui` is such a dir. Hence: the log is created by
 `install`/`watch` (the dir's owner in the normal flow), readers never re-open
-it with O_CREAT, and the shim falls back to `dd conv=nocreat` (GNU coreutils
-only; busybox has no `nocreat`) when a plain append is refused. Seen on
+it with O_CREAT, `watch` unlinks `watch.seen` before rewriting it (a
+watermark another uid left would otherwise stay stale and URLs would be
+handed out twice), and the shim falls back to `dd conv=nocreat` (GNU
+coreutils only; busybox has no `nocreat`) when a plain append is refused. Seen on
 GitHub's ubuntu runners: the suite's `nobody` created the log and root's
 `: >log` failed on alpine/debian/ubuntu. fedora:41 passed on the same kernel
 only because its bash 5.2.32 retries a refused `O_CREAT` open without the
