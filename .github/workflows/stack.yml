@@ -107,7 +107,20 @@ jobs:
       - name: OAuth bridge behaviour suite
         # Same script a developer runs locally. It installs xdg-utils itself
         # (the genuine opener has to exist before the shim records a delegate).
-        run: docker exec bmg bash /repo/tests/oauth-bridge.sh
+        # On failure the FAIL/FATAL lines become annotations and the whole
+        # output lands in the step summary: both are readable without opening
+        # the raw log (the check-run API serves annotations for public repos).
+        run: |
+          rc=0
+          docker exec bmg bash /repo/tests/oauth-bridge.sh 2>&1 | tee bridge-suite.log || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^(FAIL|FATAL)' bridge-suite.log | head -8 | while IFS= read -r l; do
+              echo "::error title=bridge suite ${{ matrix.image }}::$l"
+            done || true   # no FAIL lines (abort) must not trip -e/pipefail before the summary
+            echo "::error title=bridge suite ${{ matrix.image }}::exit $rc after $(grep -c . bridge-suite.log) lines; tail: $(tail -n 4 bridge-suite.log | tr '\n' '|')"
+            { echo "### bridge suite on ${{ matrix.image }} (exit $rc)"; echo '```'; cat bridge-suite.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Screenshot through a real VNC client
         continue-on-error: true
