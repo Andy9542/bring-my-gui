@@ -174,6 +174,23 @@ back as `install` found it; entries other apps added in between stay. Under
 `--network host` the default-route "host" is the LAN router; pass
 `HOST_ADDR` if you use host-push (`HOST_PORT`).
 
+**`watch` dies with `cannot read`, or a non-root app's URL never lands (Ubuntu/systemd host)**
+`fs.protected_regular` (Ubuntu sets 2, systemd's default is 1; it is the
+host kernel's sysctl, so every container inherits it) refuses an O_CREAT
+open of a file in a sticky world-writable dir unless the caller owns the
+file or the dir — root included, and `>>` in a shell always carries O_CREAT.
+`/tmp/bring-my-gui` is such a dir. Hence: the log is created by
+`install`/`watch` (the dir's owner in the normal flow), readers never re-open
+it with O_CREAT, and the shim falls back to `dd conv=nocreat` (GNU coreutils
+only; busybox has no `nocreat`) when a plain append is refused. Seen on
+GitHub's ubuntu runners: the suite's `nobody` created the log and root's
+`: >log` failed on alpine/debian/ubuntu. fedora:41 passed on the same kernel
+only because its bash 5.2.32 retries a refused `O_CREAT` open without the
+flag (strace: `EACCES`, then `O_WRONLY|O_TRUNC` succeeds); dash, busybox
+and older bash (ubuntu 5.2.21, debian 5.2.15) do not, and the shim runs
+under `/bin/sh`. A log left by another uid that is in the way: `rm` it as
+root and let `install` recreate it.
+
 **Login succeeds in the host browser, the sandboxed app stays logged out**
 The redirect landed on the host; what happens next is the login's LAST step
 (SKILL.md § Browser login has the A/B/C/D table). Two land here most:

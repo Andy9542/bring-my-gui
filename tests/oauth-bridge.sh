@@ -33,7 +33,9 @@ note(){ echo "NOTE  $1"; }
 
 log_lines()  { [ -f "$URL_LOG" ] && wc -l <"$URL_LOG" | tr -d ' ' || echo 0; }
 last_url()   { [ -s "$URL_LOG" ] && tail -1 "$URL_LOG" | cut -f2- || echo ""; }
-clear_log()  { mkdir -p /tmp/bring-my-gui; : >"$URL_LOG"; rm -f "$SEEN"; }
+# rm first: a log another uid left here cannot be re-opened with O_CREAT
+# under fs.protected_regular, not even by root — root may unlink it though.
+clear_log()  { mkdir -p /tmp/bring-my-gui; rm -f "$URL_LOG" "$SEEN"; ( umask 0; : >"$URL_LOG" ); }
 proc_count() { ls -d /proc/[0-9]* 2>/dev/null | wc -l | tr -d ' '; }
 stamp()      { date +%s; }
 
@@ -153,6 +155,16 @@ if as_nobody "xdg-open https://example.com/nonroot" >/dev/null 2>&1; rc=$?; [ "$
   eq "a non-root caller can create the log itself" "https://example.com/nonroot-first" "$(last_url)"
   bash "$BRIDGE" url >/dev/null 2>&1 && ok "root can read a log the non-root caller created" \
     || bad "root can read a log the non-root caller created" "url failed"
+  # fs.protected_regular (GitHub's ubuntu runners: 2) refuses root an O_CREAT
+  # open of that file; watch must only read it, the shim must still append.
+  got=$(bash "$BRIDGE" watch 5 60 2>/dev/null)
+  eq "root's watch reads a log the non-root caller created" "https://example.com/nonroot-first" "$got"
+  if dd --version 2>/dev/null | grep -q GNU; then
+    xdg-open "https://example.com/root-after-nonroot" 2>/dev/null
+    eq "root still captures into a log the non-root caller created" "https://example.com/root-after-nonroot" "$(last_url)"
+  else
+    note "busybox dd — root append into a non-root-created log not asserted"
+  fi
 else
   note "no su/chroot here — non-root capture not asserted"
 fi

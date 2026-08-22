@@ -42,7 +42,11 @@
 #    by the app with the app's environment, not yours.
 #  - the log dir and log are world-writable: the agent installs as root, the
 #    GUI app often runs as someone else, and a capture that fails on EACCES
-#    fails silently inside the app.
+#    fails silently inside the app. The log is created by install/watch —
+#    normally the dir's owner — and readers never re-open it with O_CREAT:
+#    fs.protected_regular (Ubuntu 2, systemd 1, inherited by containers)
+#    refuses O_CREAT on a file in a sticky world-writable dir unless the
+#    caller owns the file or the dir, root included.
 set -u
 
 # `docker exec` can arrive without HOME; xdg tools and this script both key
@@ -68,6 +72,15 @@ MIMEAPPS_SNAP="$MIMEAPPS.bmg-installed"     # the file as this script last left 
 OURS_RE='=bmg-(open|scheme-[^=]*)\.desktop;?$'
 
 mkdir -p "$LOG_DIR" 2>/dev/null && chmod 1777 "$LOG_DIR" 2>/dev/null
+
+# Made by whoever runs install/watch (normally the dir's owner), only when
+# absent: re-opening another uid's file with O_CREAT is what
+# fs.protected_regular refuses. Mode 666 so any uid's shim can append.
+ensure_log() {
+  [ -f "$URL_LOG" ] && return 0
+  ( umask 0; : >"$URL_LOG" ) 2>/dev/null
+  return 0
+}
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 usage() { echo "usage: $0 install|watch [SEC=180] [LOOKBACK=60]|url|handler SCHEME 'CMD %U'|status|uninstall   (host: $0 listen)" >&2; }
@@ -160,7 +173,11 @@ fi
 url=$(printf '%s' "$url" | tr -d '\r\n')
 umask 0
 mkdir -p /tmp/bring-my-gui 2>/dev/null && chmod 1777 /tmp/bring-my-gui 2>/dev/null
-printf '%s\t%s\n' "$(date +%s 2>/dev/null || echo 0)" "$url" >>"$BMG_LOG" 2>/dev/null
+stamp=$(date +%s 2>/dev/null || echo 0)
+# Appending with O_CREAT to a log another uid left here is refused under
+# fs.protected_regular, root included; GNU dd can append without O_CREAT.
+printf '%s\t%s\n' "$stamp" "$url" >>"$BMG_LOG" 2>/dev/null ||
+  printf '%s\t%s\n' "$stamp" "$url" | dd of="$BMG_LOG" conv=nocreat,notrunc oflag=append status=none 2>/dev/null
 
 [ -n "$BMG_PORT" ] || exit 0   # no listener configured: the agent reads the log
 # One POST, whichever client this image happens to have. The URL travels as the
@@ -313,6 +330,7 @@ cmd_install() {
   port="${HOST_PORT:-}"
   token="${BMG_TOKEN:-$(head -c 12 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')}"
   shim="$bin/$SHIM_NAME"
+  ensure_log
 
   write_shim "$shim" "$host" "$port" "$token" "$real" || die "cannot write $shim"
 
@@ -373,8 +391,8 @@ cmd_watch() {  # $1 = seconds to wait (default 180); $2 = lookback seconds (defa
   local timeout="${1:-180}" lookback="${2:-60}" before now deadline n i line epoch seen_n seen_line printed last_n
   case "$timeout" in ''|*[!0-9]*) usage; return 2 ;; esac
   case "$lookback" in ''|*[!0-9]*) usage; return 2 ;; esac
-  : >>"$URL_LOG" 2>/dev/null || die "cannot write $URL_LOG"
-  chmod 666 "$URL_LOG" 2>/dev/null
+  ensure_log
+  [ -r "$URL_LOG" ] || die "cannot read $URL_LOG"
   # Where the previous watch stopped, trusted only while the log still holds
   # that exact line at that exact number (a cleared log starts over).
   seen_n=0
